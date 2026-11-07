@@ -1,0 +1,12 @@
+node_modules/
+releases/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+storage.json
+session.json
+settings.json
+plugin-data/

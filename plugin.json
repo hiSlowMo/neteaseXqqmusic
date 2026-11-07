@@ -1,0 +1,41 @@
+{
+  "id": "music-fusion",
+  "name": "网易云 + QQ 音乐",
+  "version": "0.1.0",
+  "minAppVersion": "0.1.20",
+  "main": "dist/index.js",
+  "playback": "stream",
+  "permissions": {
+    "network": [
+      "music.163.com", "interfacepc.music.163.com",
+      "u.y.qq.com", "c.y.qq.com", "c6.y.qq.com", "y.qq.com",
+      "xui.ptlogin2.qq.com", "ssl.ptlogin2.graph.qq.com", "graph.qq.com",
+      "api.tencentmusic.com", "open.weixin.qq.com", "lp.open.weixin.qq.com"
+    ]
+  },
+  "settings": [
+    {
+      "key": "loginTarget",
+      "label": "登录目标",
+      "help": "填写 both（两个平台，默认）、netease（网易云）或 qqmusic（QQ）。保存后点 Sign In；Sign Out 仅退出填写的目标。切换目标不会退出另一边。"
+    },
+    {
+      "key": "qqLoginMethod",
+      "label": "QQ 音乐扫码方式",
+      "help": "填写 qq（手机 QQ，默认）或 wechat（微信）。若会员绑定微信，请填 wechat，并用对应账号扫码。"
+    },
+    {
+      "key": "importPlaylists",
+      "label": "导入旧版混合歌单 JSON",
+      "help": "粘贴离线转换工具输出的 JSON，保存后导入。重复保存相同内容不会重复建单；导入后可以清空。不会读取旧应用的账号或登录凭据。"
+    }
+  ],
+  "navigation": [
+    { "builtin": "home", "title": "组合音乐源" },
+    { "title": "网易云发现", "page": "netease:home", "icon": "note" },
+    { "title": "QQ 音乐发现", "page": "qqmusic:home", "icon": "note" },
+    { "builtin": "liked", "title": "两边喜欢的音乐" },
+    { "builtin": "stations", "title": "电台与私人漫游" },
+    { "title": "账号与说明", "page": "accounts", "icon": "star" }
+  ]
+}

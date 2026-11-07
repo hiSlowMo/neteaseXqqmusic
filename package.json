@@ -1,0 +1,23 @@
+{
+  "name": "mygo-music-fusion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "NetEase and QQ Music combined source for MyGo Music",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test --test-timeout=30000 tests/*.test.mjs",
+    "test:core": "node --test tests/fusion.test.mjs tests/session.test.mjs tests/http.test.mjs",
+    "test:runtime": "node scripts/test-runtime.mjs",
+    "pack": "node scripts/pack.mjs",
+    "import-playlists": "node scripts/import-playlists.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "jpeg-js": "0.4.4",
+    "jsqr": "1.4.0",
+    "pako": "3.0.3",
+    "qrcode": "1.5.4"
+  }
+}
