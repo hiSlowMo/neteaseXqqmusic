@@ -17,7 +17,11 @@ MyGo Music 的组合音乐源插件。目标宿主为 [egoist/mygo-music](https:
 
 ## 安装
 
-在原版 **MyGo Music** 的 Settings → Plugins → `+` 中使用本地 ZIP 安装，选择 `mygo-music-fusion-0.1.0.zip`。若界面只提供插件目录入口，可解压 ZIP，令 `plugin.json` 位于一个独立插件文件夹的根目录，再重启/重新加载插件。
+发布仓库：[`hiSlowMo/mygo-music-fusion`](https://github.com/hiSlowMo/mygo-music-fusion)。
+
+[在 MyGo Music 中安装](mygo-music://install-plugin?repo=hiSlowMo/mygo-music-fusion) · [下载最新版本](https://github.com/hiSlowMo/mygo-music-fusion/releases/latest)
+
+也可在原版 **MyGo Music** 的 Settings → Plugins → `+` 中填写仓库地址 `https://github.com/hiSlowMo/mygo-music-fusion`，或使用本地 ZIP 安装，选择 `mygo-music-fusion-0.1.0.zip`。若界面只提供插件目录入口，可解压 ZIP，令 `plugin.json` 位于一个独立插件文件夹的根目录，再重启/重新加载插件。
 
 文件结构至少包含：
 
@@ -104,3 +108,9 @@ npm run pack
 ```
 
 设计见 [architecture.md](docs/architecture.md)，版本变化见 [CHANGELOG.md](CHANGELOG.md)，许可及来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。GitHub Actions 会检查核心测试、构建产物与源码是否一致，并验证安装包。
+
+维护者发布已提交的 v0.1.0 时，可运行以下脚本。它只接受 `hiSlowMo` 的 GitHub 登录，核对干净工作区和安装包校验和，然后创建公开仓库、推送 `main`、添加 `mygo-music-plugin` 主题并上传 Release；已有 Release 不会被覆盖。
+
+```bash
+bash scripts/publish.sh
+```

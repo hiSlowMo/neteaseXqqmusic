@@ -5,6 +5,14 @@
   "type": "module",
   "license": "AGPL-3.0-only",
   "description": "NetEase and QQ Music combined source for MyGo Music",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hiSlowMo/mygo-music-fusion.git"
+  },
+  "homepage": "https://github.com/hiSlowMo/mygo-music-fusion#readme",
+  "bugs": {
+    "url": "https://github.com/hiSlowMo/mygo-music-fusion/issues"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test --test-timeout=30000 tests/*.test.mjs",

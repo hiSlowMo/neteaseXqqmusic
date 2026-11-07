@@ -5,6 +5,8 @@ MyGo Music Fusion 的首个公开版本，将网易云与 QQ 的账号、搜索�
 - 本地混合歌单支持两边歌曲混合添加、去重、重排、改名和持久化，并附旧版歌单离线转换工具。
 - QQ 播放前会话检查、并发续期合并、登录/退出竞态保护，以及 song MID + MediaMID 播放地址解析。
 
-在 MyGo Music → Settings → Plugins → + 中安装本 Release 的 `mygo-music-fusion-0.1.0.zip`，或填写此 GitHub 仓库地址。安装 ZIP 含完整源码与 AGPL-3.0 及第三方许可，无需 Node、Go、MPV 或第三方 API 服务。
+[在 MyGo Music 中安装](mygo-music://install-plugin?repo=hiSlowMo/mygo-music-fusion)
+
+在 MyGo Music → Settings → Plugins → + 中安装本 Release 的 `mygo-music-fusion-0.1.0.zip`，或填写 `https://github.com/hiSlowMo/mygo-music-fusion`。安装 ZIP 含完整源码与 AGPL-3.0 及第三方许可，无需 Node、Go、MPV 或第三方 API 服务。
 
 用户已反馈实际登录测试可行，18 项核心离线测试与构建通过。此版本与该登录测试版的插件 JS 完全一致。各类会员歌曲、长期续期及 provider 完整自动化回归尚未全面验证。暂停、缓冲和失败后跳歌策略由上游播放器控制；云端歌单在插件内为只读，本地混合歌单不会写回两边服务器。
