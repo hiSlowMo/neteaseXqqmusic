@@ -1,7 +1,7 @@
 {
   "id": "music-fusion",
-  "name": "网易云 + QQ 音乐",
-  "version": "0.1.0",
+  "name": "NetEaseXQQMusic",
+  "version": "0.1.1",
   "minAppVersion": "0.1.20",
   "main": "dist/index.js",
   "playback": "stream",
@@ -31,7 +31,7 @@
     }
   ],
   "navigation": [
-    { "builtin": "home", "title": "组合音乐源" },
+    { "builtin": "home", "title": "NetEaseXQQMusic" },
     { "title": "网易云发现", "page": "netease:home", "icon": "note" },
     { "title": "QQ 音乐发现", "page": "qqmusic:home", "icon": "note" },
     { "builtin": "liked", "title": "两边喜欢的音乐" },

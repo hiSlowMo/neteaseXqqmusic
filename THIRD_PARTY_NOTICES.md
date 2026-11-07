@@ -1,6 +1,6 @@
 # Third-party notices
 
-MyGo Music Fusion is licensed under GNU AGPL-3.0-only. See LICENSE. It is an independent community plugin, not an official NetEase, Tencent/QQ, or MyGo Music release.
+NetEaseXQQMusic is licensed under GNU AGPL-3.0-only. See LICENSE. It is an independent community plugin, not an official NetEase, Tencent/QQ, or MyGo Music release.
 
 ## Provider implementations
 

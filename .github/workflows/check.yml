@@ -23,4 +23,4 @@ jobs:
         run: git diff --exit-code -- dist/index.js
       - run: npm run pack
       - name: Verify release archive
-        run: unzip -t releases/mygo-music-fusion-*.zip
+        run: unzip -t releases/neteaseXqqmusic-*.zip

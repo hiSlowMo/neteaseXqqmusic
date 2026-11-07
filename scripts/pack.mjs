@@ -11,7 +11,7 @@ const manifest = JSON.parse(await readFile(join(root, 'plugin.json'), 'utf8'));
 await readFile(join(root, manifest.main));
 const releases = join(root, 'releases');
 await mkdir(releases, { recursive: true });
-const name = `mygo-music-fusion-${manifest.version}.zip`;
+const name = `neteaseXqqmusic-${manifest.version}.zip`;
 const output = join(releases, name);
 const temporary = await mkdtemp(join(tmpdir(), 'fusion-pack-'));
 try {

@@ -1,17 +1,17 @@
 {
-  "name": "mygo-music-fusion",
-  "version": "0.1.0",
+  "name": "neteasexqqmusic",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
-  "description": "NetEase and QQ Music combined source for MyGo Music",
+  "description": "NetEaseXQQMusic: NetEase and QQ Music combined source for MyGo Music",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hiSlowMo/mygo-music-fusion.git"
+    "url": "git+https://github.com/hiSlowMo/neteaseXqqmusic.git"
   },
-  "homepage": "https://github.com/hiSlowMo/mygo-music-fusion#readme",
+  "homepage": "https://github.com/hiSlowMo/neteaseXqqmusic#readme",
   "bugs": {
-    "url": "https://github.com/hiSlowMo/mygo-music-fusion/issues"
+    "url": "https://github.com/hiSlowMo/neteaseXqqmusic/issues"
   },
   "scripts": {
     "build": "node scripts/build.mjs",

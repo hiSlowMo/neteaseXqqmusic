@@ -351,7 +351,7 @@ export function createFusion(providers, host) {
     const profiles = read('profiles', {});
     const status = SOURCES.map(p => `${LABEL[p]}：${profiles[p] ? profiles[p].name : '未登录'}${statuses.has(p) ? '（' + statuses.get(p) + '）' : ''}`).join('\n');
     return {
-      title: '网易云 + QQ 音乐', subtitle: '统一搜索 · 跨平台播放 · 本地混合歌单',
+      title: 'NetEaseXQQMusic', subtitle: '统一搜索 · 跨平台播放 · 本地混合歌单',
       description: status,
       sections: [
         { title: '音乐发现', links: [
@@ -366,7 +366,7 @@ export function createFusion(providers, host) {
   async function browse({ page }) {
     if (page === 'accounts') {
       const value = await home();
-      return { title: '账号与使用说明', description: `${value.description}\n\n在设置 → 插件 → 网易云 + QQ 音乐的“登录目标”中填写 both（两个平台）、netease（网易云）或 qqmusic（QQ），保存后点 Sign In。默认依次扫描两边二维码；也可单独登录或退出一个平台。QQ 扫码方式填写 qq（手机 QQ）或 wechat（微信）。\n\n带〔网易云〕或〔QQ〕的歌曲按原平台播放。新建歌单保存在本机，支持混合来源；平台歌单为只读。插件更新不会删除会话和本地歌单。\n\n播放完整链接受账号、版权和地区权限限制；暂停、缓冲及失败后是否跳歌由 MyGo Music 本体处理。`, sections: [] };
+      return { title: '账号与使用说明', description: `${value.description}\n\n在设置 → 插件 → NetEaseXQQMusic的“登录目标”中填写 both（两个平台）、netease（网易云）或 qqmusic（QQ），保存后点 Sign In。默认依次扫描两边二维码；也可单独登录或退出一个平台。QQ 扫码方式填写 qq（手机 QQ）或 wechat（微信）。\n\n带〔网易云〕或〔QQ〕的歌曲按原平台播放。新建歌单保存在本机，支持混合来源；平台歌单为只读。插件更新不会删除会话和本地歌单。\n\n播放完整链接受账号、版权和地区权限限制；暂停、缓冲及失败后是否跳歌由 MyGo Music 本体处理。`, sections: [] };
     }
     const { provider, id } = splitID(page);
     if (!SOURCES.includes(provider)) throw error('unsupported', '没有这个页面');

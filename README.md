@@ -1,8 +1,8 @@
-# MyGo Music Fusion · 网易云 + QQ 音乐
+# NetEaseXQQMusic
 
-MyGo Music 的组合音乐源插件。目标宿主为 [egoist/mygo-music](https://github.com/egoist/mygo-music) **0.1.20 或兼容后续版本**，不需要修改或重新编译播放器。源码采用 AGPL-3.0-only。
+网易云 + QQ 音乐双平台插件，适用于 MyGo Music。目标宿主为 [egoist/mygo-music](https://github.com/egoist/mygo-music) **0.1.20 或兼容后续版本**，不需要修改或重新编译播放器。源码采用 AGPL-3.0-only。
 
-**当前版本 0.1.0 是首个公开版本。** 已有本机用户确认登录测试可行；18 项核心离线测试和 JS 构建通过。provider 完整自动化回归、独立宿主集成测试，以及各类会员歌曲和长期续期仍未完整验证，详见 [验证记录](docs/validation.md)。
+**当前版本 0.1.1 使用新名称 NetEaseXQQMusic。** 0.1.0 已有本机用户确认登录测试可行；18 项核心离线测试和 JS 构建通过。provider 完整自动化回归、独立宿主集成测试，以及各类会员歌曲和长期续期仍未完整验证，详见 [验证记录](docs/validation.md)。
 
 ## 已实现
 
@@ -17,11 +17,11 @@ MyGo Music 的组合音乐源插件。目标宿主为 [egoist/mygo-music](https:
 
 ## 安装
 
-发布仓库：[`hiSlowMo/mygo-music-fusion`](https://github.com/hiSlowMo/mygo-music-fusion)。
+发布仓库：[`hiSlowMo/neteaseXqqmusic`](https://github.com/hiSlowMo/neteaseXqqmusic)。
 
-[在 MyGo Music 中安装](mygo-music://install-plugin?repo=hiSlowMo/mygo-music-fusion) · [下载最新版本](https://github.com/hiSlowMo/mygo-music-fusion/releases/latest)
+[在 MyGo Music 中安装](mygo-music://install-plugin?repo=hiSlowMo/neteaseXqqmusic) · [下载最新版本](https://github.com/hiSlowMo/neteaseXqqmusic/releases/latest)
 
-也可在原版 **MyGo Music** 的 Settings → Plugins → `+` 中填写仓库地址 `https://github.com/hiSlowMo/mygo-music-fusion`，或使用本地 ZIP 安装，选择 `mygo-music-fusion-0.1.0.zip`。若界面只提供插件目录入口，可解压 ZIP，令 `plugin.json` 位于一个独立插件文件夹的根目录，再重启/重新加载插件。
+也可在原版 **MyGo Music** 的 Settings → Plugins → `+` 中填写仓库地址 `https://github.com/hiSlowMo/neteaseXqqmusic`，或使用本地 ZIP 安装，选择 `neteaseXqqmusic-0.1.1.zip`。若界面只提供插件目录入口，可解压 ZIP，令 `plugin.json` 位于一个独立插件文件夹的根目录，再重启/重新加载插件。
 
 文件结构至少包含：
 
@@ -51,7 +51,7 @@ MyGo Music 0.1.20 的插件设置为文本框，按以下值填写，回车或�
 
 ## 混合歌单与旧数据导入
 
-在组合音乐源侧栏点 `+` 新建歌单。从任一平台搜索结果的右键菜单 Add to Playlist 添加歌曲。本地歌单跟随插件数据保留，不会同步写回网易云或 QQ 服务器；更换电脑需备份/恢复插件数据。
+在 NetEaseXQQMusic 侧栏点 `+` 新建歌单。从任一平台搜索结果的右键菜单 Add to Playlist 添加歌曲。本地歌单跟随插件数据保留，不会同步写回网易云或 QQ 服务器；更换电脑需备份/恢复插件数据。
 
 旧版 `playlists.json` 是负数 ID 的本地歌单数组。用工具转换指定文件：
 
@@ -109,7 +109,7 @@ npm run pack
 
 设计见 [architecture.md](docs/architecture.md)，版本变化见 [CHANGELOG.md](CHANGELOG.md)，许可及来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。GitHub Actions 会检查核心测试、构建产物与源码是否一致，并验证安装包。
 
-维护者发布已提交的 v0.1.0 时，可运行以下脚本。它只接受 `hiSlowMo` 的 GitHub 登录，核对干净工作区和安装包校验和，然后创建公开仓库、推送 `main`、添加 `mygo-music-plugin` 主题并上传 Release；已有 Release 不会被覆盖。
+维护者发布已提交的 v0.1.1 时，可运行以下脚本。它只接受 `hiSlowMo` 的 GitHub 登录，核对干净工作区和安装包校验和，然后创建公开仓库、推送 `main`、添加 `mygo-music-plugin` 主题并上传 Release；已有 Release 不会被覆盖。
 
 ```bash
 bash scripts/publish.sh
