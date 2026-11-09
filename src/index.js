@@ -16,5 +16,7 @@ const api = createFusion({ netease, qqmusic }, {
 export const {
   account, signIn, signOut, setSetting, home, browse, search, suggest, playlists, playlist,
   createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist, movePlaylistTrack,
-  recent, played, stream, lyrics, like, isLiked, liked, album, artist, stations, stationNext, comments,
+  savePlaylist, recent, played, stream, lyrics, like, isLiked, liked,
+  followArtist, shows, show, subscribeShow,
+  album, artist, stations, stationNext, comments, likeComment, postComment,
 } = api;

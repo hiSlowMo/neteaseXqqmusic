@@ -1,7 +1,7 @@
 {
   "id": "music-fusion",
   "name": "NetEaseXQQMusic",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "minAppVersion": "0.1.20",
   "main": "dist/index.js",
   "playback": "stream",
@@ -47,10 +47,13 @@
   ],
   "navigation": [
     { "builtin": "home", "title": "NetEaseXQQMusic" },
+    { "title": "网易云歌单", "page": "library:netease", "icon": "playlist" },
+    { "title": "QQ 歌单", "page": "library:qqmusic", "icon": "playlist" },
     { "title": "按音源查看", "page": "sources", "icon": "note" },
     { "title": "网易云发现", "page": "netease:home", "icon": "note" },
     { "title": "QQ 音乐发现", "page": "qqmusic:home", "icon": "note" },
-    { "builtin": "liked", "title": "两边喜欢的音乐" },
+    { "builtin": "liked", "title": "喜欢的音乐" },
+    { "builtin": "shows", "title": "播客电台" },
     { "builtin": "stations", "title": "电台与私人漫游" },
     { "title": "账号与说明", "page": "accounts", "icon": "star" }
   ]

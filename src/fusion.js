@@ -59,7 +59,9 @@ export function createFusion(providers, host) {
       statuses.delete(provider);
       return result;
     } catch (e) {
-      statuses.set(provider, e.code === 'signIn' ? '需要重新扫码登录' : '上次请求失败，请检查网络或稍后重试');
+      if (e.code !== 'unsupported') {
+        statuses.set(provider, e.code === 'signIn' ? '需要重新扫码登录' : '上次请求失败，请检查网络或稍后重试');
+      }
       throw e;
     }
   }
@@ -96,8 +98,9 @@ export function createFusion(providers, host) {
     };
     if (item.showId) result.showId = identify(provider, item.showId);
     // List membership/VIP badges cannot prove that an authorized stream is
-    // unavailable. Keep the track selectable and let stream() decide.
-    result.unavailable = false;
+    // unavailable. Keep songs selectable and let stream() decide; podcast
+    // episodes without an audio ID remain marked unavailable.
+    result.unavailable = item.showId ? !!item.unavailable : false;
     delete result.source;
     return result;
   }
@@ -113,13 +116,15 @@ export function createFusion(providers, host) {
     return items;
   }
   const tracks = (provider, items = []) => remember(items.filter(t => t?.id).map(t => track(provider, t))).map(presentTrack);
-  function playlistSummary(provider, item) {
+  function playlistSummary(provider, item, options = {}) {
+    const canEdit = typeof providers[provider]?.addToPlaylist === 'function';
+    const showSource = options.showSource !== false;
     return {
-      ...item, id: identify(provider, item.id), name: `${LABEL[provider]} · ${item.name || '歌单'}`,
-      owner: `${LABEL[provider]}${item.owner ? ' · ' + item.owner : ''}`,
-      // Cloud playlists stay read-only in the combined source. New playlists
-      // belong here and can hold songs from both accounts.
-      mine: !!item.mine, fixed: true,
+      ...item, id: identify(provider, item.id),
+      name: showSource ? `${LABEL[provider]} · ${item.name || '歌单'}` : (item.name || '歌单'),
+      owner: showSource ? `${LABEL[provider]}${item.owner ? ' · ' + item.owner : ''}` : (item.owner || ''),
+      mine: !!item.mine,
+      fixed: !item.mine || !!item.fixed || !canEdit,
       ...(item.tracks ? { tracks: tracks(provider, item.tracks) } : {}),
     };
   }
@@ -140,6 +145,28 @@ export function createFusion(providers, host) {
         ...(section.links ? { links: section.links.map(link => ({ ...link, page: identify(provider, link.page) })) } : {}),
         ...(section.morePage ? { morePage: identify(provider, section.morePage) } : {}),
       })),
+    };
+  }
+  function playlistsLink(provider, mine, imageUrl) {
+    return {
+      title: mine ? '我的歌单' : '收藏的歌单',
+      subtitle: `${LABEL[provider]} · ${mine ? '自建歌单与喜欢列表' : '收藏的其他歌单'}`,
+      page: `playlists:${provider}:${mine ? 'mine' : 'saved'}`,
+      imageUrl: imageUrl || '',
+    };
+  }
+  async function libraryPlaylists({ page }) {
+    const match = /^playlists:(netease|qqmusic):(mine|saved)$/.exec(String(page));
+    if (!match) throw error('unsupported', '没有这个歌单页面');
+    const [, provider, kind] = match;
+    const result = await call(provider, 'playlists');
+    const items = (result || [])
+      .filter(p => !!p.mine === (kind === 'mine'))
+      .map(p => playlistSummary(provider, p, { showSource: false }));
+    return {
+      title: `${LABEL[provider]} · ${kind === 'mine' ? '我的歌单' : '收藏的歌单'}`,
+      subtitle: kind === 'mine' ? '自建歌单与喜欢列表' : '收藏的其他歌单',
+      sections: [{ playlists: items, empty: kind === 'mine' ? '暂无自建歌单，点击侧栏 + 可新建' : '暂无收藏歌单，可在第三方歌单页点击收藏' }],
     };
   }
   function localLists() { return read('playlists', []).map(list => ({ ...list, tracks: (list.tracks || []).map(storedTrack) })); }
@@ -272,7 +299,7 @@ export function createFusion(providers, host) {
   async function playlists() {
     const result = localLists().map(presentPlaylist);
     const pages = await Promise.all(SOURCES.map(async provider => {
-      try { return (await call(provider, 'playlists')).map(p => playlistSummary(provider, p)); }
+      try { return (await call(provider, 'playlists')).map(p => playlistSummary(provider, p, { showSource: false })); }
       catch { return []; }
     }));
     return [...result, ...pages.flat()];
@@ -282,7 +309,38 @@ export function createFusion(providers, host) {
     if (identity.provider === 'local') return presentPlaylist(localList(id));
     return playlistSummary(identity.provider, await call(identity.provider, 'playlist', { id: identity.id }));
   }
+  function parseCloudPlaylistName(raw) {
+    const text = validName(raw);
+    const match = /^(netease|ncm|网易云音乐|网易云|qqmusic|qq|qq\s*音乐)\s*[:：]\s*(.+)$/i.exec(text);
+    if (!match) return null;
+    const prefix = match[1].toLowerCase();
+    const provider = ['netease', 'ncm', '网易云音乐', '网易云'].includes(prefix) ? 'netease' : 'qqmusic';
+    return { provider, name: validName(match[2]) };
+  }
+  function stripCloudPlaylistPrefix(provider, name) {
+    const trimmed = validName(name);
+    const prefix = `${LABEL[provider]} · `;
+    if (trimmed.startsWith(prefix)) {
+      const rest = trimmed.slice(prefix.length).trim();
+      if (rest) return validName(rest);
+    }
+    return trimmed;
+  }
+  function sameProviderTrackIDs(provider, trackIds) {
+    if (!Array.isArray(trackIds) || !trackIds.length) throw new Error('无效歌曲列表');
+    return trackIds.map(trackId => {
+      const parsed = splitID(trackId);
+      if (parsed.provider !== provider) {
+        throw error('unsupported', `${LABEL[provider]}云端歌单仅支持${LABEL[provider]}歌曲，跨平台歌曲请添加到本地混合歌单`);
+      }
+      return parsed.id;
+    });
+  }
   function createPlaylist({ name }) {
+    const cloud = parseCloudPlaylistName(name);
+    if (cloud && typeof providers[cloud.provider]?.createPlaylist === 'function') {
+      return call(cloud.provider, 'createPlaylist', { name: cloud.name }).then(p => playlistSummary(cloud.provider, { ...p, mine: true }));
+    }
     name = validName(name);
     const sequence = Number(read('playlistSequence', 0)) + 1;
     write('playlistSequence', sequence);
@@ -291,11 +349,19 @@ export function createFusion(providers, host) {
     return list;
   }
   function renamePlaylist({ id, name }) {
-    if (splitID(id).provider !== 'local') throw error('unsupported', '请在对应平台客户端编辑云端歌单');
+    const { provider, id: rawID } = splitID(id);
+    if (provider !== 'local') {
+      if (!SOURCES.includes(provider)) throw error('unsupported', '不支持的歌单来源');
+      return call(provider, 'renamePlaylist', { id: rawID, name: stripCloudPlaylistPrefix(provider, name) });
+    }
     updateLocal(id, list => { list.name = validName(name); });
   }
   function deletePlaylist({ id }) {
-    if (splitID(id).provider !== 'local') throw error('unsupported', '只能删除本地混合歌单');
+    const { provider, id: rawID } = splitID(id);
+    if (provider !== 'local') {
+      if (!SOURCES.includes(provider)) throw error('unsupported', '不支持的歌单来源');
+      return call(provider, 'deletePlaylist', { id: rawID });
+    }
     localList(id);
     write('playlists', localLists().filter(p => p.id !== id));
   }
@@ -314,7 +380,13 @@ export function createFusion(providers, host) {
     throw new Error('这首歌曲的资料已不在缓存，请重新搜索或打开原歌单后添加');
   }
   async function addToPlaylist({ id, trackIds }) {
-    if (splitID(id).provider !== 'local') throw error('unsupported', '混合歌曲请添加到本地歌单');
+    const { provider, id: rawID } = splitID(id);
+    if (provider !== 'local') {
+      if (!SOURCES.includes(provider)) throw error('unsupported', '不支持的歌单来源');
+      const rawTrackIds = sameProviderTrackIDs(provider, trackIds);
+      await call(provider, 'addToPlaylist', { id: rawID, trackIds: rawTrackIds });
+      return;
+    }
     if (!Array.isArray(trackIds)) throw new Error('无效歌曲列表');
     const resolved = await Promise.all(trackIds.map(resolveTrack));
     updateLocal(id, list => {
@@ -323,12 +395,17 @@ export function createFusion(providers, host) {
     });
   }
   function removeFromPlaylist({ id, trackIds }) {
-    if (splitID(id).provider !== 'local') throw error('unsupported', '只能编辑本地混合歌单');
+    const { provider, id: rawID } = splitID(id);
+    if (provider !== 'local') {
+      if (!SOURCES.includes(provider)) throw error('unsupported', '不支持的歌单来源');
+      const rawTrackIds = sameProviderTrackIDs(provider, trackIds);
+      return call(provider, 'removeFromPlaylist', { id: rawID, trackIds: rawTrackIds });
+    }
     const removed = new Set(trackIds);
     updateLocal(id, list => { list.tracks = list.tracks.filter(t => !removed.has(t.id)); });
   }
   function movePlaylistTrack({ id, from, to }) {
-    if (splitID(id).provider !== 'local') throw error('unsupported', '只能编辑本地混合歌单');
+    if (splitID(id).provider !== 'local') throw error('unsupported', '原平台云端歌单暂不支持调整顺序，仅本地混合歌单支持拖拽排序');
     updateLocal(id, list => {
       if (![from, to].every(n => Number.isInteger(n) && n >= 0 && n < list.tracks.length)) throw new Error('无效歌曲位置');
       list.tracks.splice(to, 0, list.tracks.splice(from, 1)[0]);
@@ -378,21 +455,52 @@ export function createFusion(providers, host) {
   async function home() {
     const profiles = read('profiles', {});
     const status = SOURCES.map(p => `${LABEL[p]}：${profiles[p] ? profiles[p].name : '未登录'}${statuses.has(p) ? '（' + statuses.get(p) + '）' : ''}`).join('\n');
+    const covers = { netease: '', qqmusic: '' };
+    await Promise.all(SOURCES.map(async provider => {
+      try {
+        const lists = await call(provider, 'playlists');
+        covers[provider] = lists.find(p => p.imageUrl)?.imageUrl || '';
+      } catch { /* The home cards stay usable when a source is offline. */ }
+    }));
     return {
       title: 'NetEaseXQQMusic', subtitle: '统一搜索 · 跨平台播放 · 本地混合歌单',
       description: status,
       sections: [
         { title: '音乐发现', links: [
-          { title: '网易云音乐', subtitle: '推荐、排行榜、每日推荐', page: 'netease:home' },
-          { title: 'QQ 音乐', subtitle: '推荐歌单、排行榜', page: 'qqmusic:home' },
-          { title: '按音源查看', subtitle: '最近搜索、播放记录和混合歌单按网易云 / QQ 分组', page: 'sources' },
-          { title: '账号与使用说明', subtitle: '两个账号分开登录，平台歌曲独立保留', page: 'accounts' },
+          { title: '网易云音乐', subtitle: '推荐、排行榜、每日推荐', page: 'netease:home', imageUrl: covers.netease },
+          { title: 'QQ 音乐', subtitle: '推荐歌单、排行榜', page: 'qqmusic:home', imageUrl: covers.qqmusic },
+        ] },
+        { title: '歌单管理', links: [
+          { title: '网易云歌单', subtitle: '我的歌单与收藏歌单', page: 'library:netease', imageUrl: covers.netease },
+          { title: 'QQ 歌单', subtitle: '我的歌单与收藏歌单', page: 'library:qqmusic', imageUrl: covers.qqmusic },
+        ] },
+        { title: '其他', links: [
+          { title: '按音源查看', subtitle: '最近搜索、播放记录和混合歌单按平台分组', page: 'sources' },
+          { title: '账号与使用说明', subtitle: '双平台登录、收藏与插件更新说明', page: 'accounts' },
         ] },
         { title: '本地混合歌单', playlists: localLists().map(presentPlaylist), empty: '使用侧栏的 + 新建歌单，再从搜索结果添加两边的歌曲。' },
       ],
     };
   }
   async function browse({ page }) {
+    if (page.startsWith('updates')) throw error('unsupported', '请到设置 → 插件 → NetEaseXQQMusic 的菜单中检查更新');
+    if (page.startsWith('playlists:')) return libraryPlaylists({ page });
+    if (page.startsWith('library:')) {
+      const provider = page.slice('library:'.length);
+      if (!SOURCES.includes(provider)) throw error('unsupported', '没有这个歌单页面');
+      const lists = await call(provider, 'playlists');
+      const mine = lists.filter(p => p.mine);
+      const saved = lists.filter(p => !p.mine);
+      const cover = lists.find(p => p.imageUrl)?.imageUrl || '';
+      return {
+        title: `${LABEL[provider]}歌单`,
+        subtitle: '我的歌单与收藏歌单已分开整理',
+        sections: [{ links: [
+          playlistsLink(provider, true, mine.find(p => p.imageUrl)?.imageUrl || cover),
+          playlistsLink(provider, false, saved.find(p => p.imageUrl)?.imageUrl || cover),
+        ] }],
+      };
+    }
     if (page.startsWith('sources:playlist:')) {
       const list = await playlist({ id: page.slice('sources:playlist:'.length) });
       return { title: `${list.name} · 按音源查看`, description: '按平台分组播放和添加歌曲；在原歌单中编辑顺序。', sections: sourceSections(list.tracks || [], '歌曲') };
@@ -407,7 +515,7 @@ export function createFusion(providers, host) {
     }
     if (page === 'accounts') {
       const value = await home();
-      return { title: '账号与使用说明', description: `${value.description}\n\n在设置 → 插件 → NetEaseXQQMusic 的“登录目标”中填写 both（两个平台）、netease（网易云）或 qqmusic（QQ），保存后点 Sign In。默认依次扫描两边二维码；也可单独登录或退出一个平台。QQ 扫码方式填写 qq（手机 QQ）、qqmusic（QQ 音乐 App）或 wechat（微信）。App 扫码首次需在 MyGo 中允许此插件运行程序；另外两种方式无需运行程序权限。\n\n默认保留原始歌名，便于插件岛等工具匹配歌词。侧栏“按音源查看”按网易云 / QQ 音乐分组展示已加载的最近搜索、最近播放和混合歌单；搜索词前加 qq: 或 netease: 可临时指定音源，也可设置“搜索音源”为 both、netease 或 qqmusic。宿主目前没有插件自定义逐曲音源徽标接口，全局混合搜索和队列无法单独加徽标。如需在歌名中显示〔网易云〕或〔QQ〕，可把“歌名显示平台标签”填写为 true；使用外部歌词工具时请关闭。更新或切换设置后，从搜索或歌单重新加入歌曲，才能替换旧播放队列里的标题。歌曲始终按原平台播放；平台歌单和发现页保留来源名称。新建歌单保存在本机，支持混合来源；平台歌单为只读。插件更新不会删除会话和本地歌单。\n\n播放完整链接受账号、版权和地区权限限制；暂停、缓冲及失败后是否跳歌由 MyGo Music 本体处理。`, sections: [] };
+      return { title: '账号与使用说明', description: `${value.description}\n\n在设置 → 插件 → NetEaseXQQMusic 的“登录目标”中填写 both（两个平台）、netease（网易云）或 qqmusic（QQ），保存后点 Sign In。默认依次扫描两边二维码；也可单独登录或退出一个平台。QQ 扫码方式填写 qq（手机 QQ）、qqmusic（QQ 音乐 App）或 wechat（微信）。App 扫码首次需在 MyGo 中允许此插件运行程序；另外两种方式无需运行程序权限。\n\n默认保留原始歌名，便于插件岛等工具匹配歌词。侧栏“按音源查看”按网易云 / QQ 音乐分组展示已加载的最近搜索、最近播放和混合歌单；搜索词前加 qq: 或 netease: 可临时指定音源，也可设置“搜索音源”为 both、netease 或 qqmusic。宿主目前没有插件自定义逐曲音源徽标接口，全局混合搜索和队列无法单独加徽标。如需在歌名中显示〔网易云〕或〔QQ〕，可把“歌名显示平台标签”填写为 true；使用外部歌词工具时请关闭。更新或切换设置后，从搜索或歌单重新加入歌曲，才能替换旧播放队列里的标题。歌曲始终按原平台播放；平台歌单和发现页保留来源名称。新建歌单默认保存在本机（支持跨平台混合来源），名称前加“网易云：”或“QQ：”可直接新建对应平台云端歌单；自建云端普通歌单支持直接添加/移除同平台歌曲、重命名和删除。更新请到设置 → 插件 → NetEaseXQQMusic 的 ⋯ 菜单选择 Check for Updates；发现新版后点 Update。从 GitHub 仓库安装的插件由 MyGo Music 每 24 小时自动检查，安装前会确认，插件更新不会删除会话和本地歌单。\n\n播放完整链接受账号、版权和地区权限限制；暂停、缓冲及失败后是否跳歌由 MyGo Music 本体处理。`, sections: [] };
     }
     const { provider, id } = splitID(page);
     if (!SOURCES.includes(provider)) throw error('unsupported', '没有这个页面');
@@ -432,8 +540,13 @@ export function createFusion(providers, host) {
         state.done[p] = !page.more || !items.length;
         return key === 'tracks' ? tracks(p, items) : items.map(a => album(p, a));
       } catch (e) {
-        if (e.code === 'signIn') state.done[p] = true;
-        return [];
+        if (e.code === 'signIn') {
+          state.done[p] = true;
+          return [];
+        }
+        // A failed library request is not an empty library. Let the host show
+        // its error/retry state instead of hiding albums the account has saved.
+        throw e;
       }
     }));
     const values = pages.flat();
@@ -465,6 +578,7 @@ export function createFusion(providers, host) {
   return {
     account, signIn, signOut, setSetting, home, browse, search, playlists, playlist,
     createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist, movePlaylistTrack,
+    savePlaylist: routed('savePlaylist'),
     recent: () => read('recent', []).map(presentTrack), played,
     suggest: async ({ query }) => {
       const scope = searchScope(query, setting('searchSource'));
@@ -474,8 +588,34 @@ export function createFusion(providers, host) {
       }));
       return [...new Set(answers.flat())].slice(0, 12).map(value => scope.prefix + value);
     },
-    stream: routed('stream'), lyrics: routed('lyrics'), like: routed('like'), isLiked,
-    liked: ({ offset = 0 }) => paged('liked', 'tracks', offset),
+    stream: routed('stream'), lyrics: routed('lyrics'),
+    like: async args => {
+      const result = await routed('like')(args);
+      searches.delete('@liked');
+      return result;
+    },
+    isLiked,
+    liked: ({ offset = 0 } = {}) => paged('liked', 'tracks', offset),
+    followArtist: routed('followArtist'),
+    shows: async () => {
+      const all = await Promise.all(SOURCES.map(async p => {
+        if (typeof providers[p]?.shows !== 'function') return [];
+        try { return (await call(p, 'shows')).map(s => showSummary(p, s)); }
+        catch { return []; }
+      }));
+      return all.flat();
+    },
+    show: async ({ id, offset = 0 }) => {
+      const { provider, id: raw } = splitID(id);
+      if (!SOURCES.includes(provider)) throw error('unsupported', '不支持的来源');
+      const page = await call(provider, 'show', { id: raw, offset });
+      return {
+        show: showSummary(provider, page.show),
+        episodes: tracks(provider, page.episodes),
+        more: !!page.more,
+      };
+    },
+    subscribeShow: routed('subscribeShow'),
     album: async ({ id }) => {
       const { provider, id: raw } = splitID(id);
       const page = await call(provider, 'album', { id: raw });
@@ -500,6 +640,16 @@ export function createFusion(providers, host) {
     comments: async ({ trackId, offset = 0 }) => {
       const { provider, id } = splitID(trackId);
       return call(provider, 'comments', { trackId: id, offset });
+    },
+    likeComment: async ({ trackId, commentId, on }) => {
+      const { provider, id } = splitID(trackId);
+      if (!SOURCES.includes(provider)) throw error('unsupported', '不支持的来源');
+      return call(provider, 'likeComment', { trackId: id, commentId: String(commentId || '').replace(/^(?:netease|qqmusic):/, ''), on });
+    },
+    postComment: async ({ trackId, text }) => {
+      const { provider, id } = splitID(trackId);
+      if (!SOURCES.includes(provider)) throw error('unsupported', '不支持的来源');
+      return call(provider, 'postComment', { trackId: id, text });
     },
   };
 }

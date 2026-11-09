@@ -590,7 +590,8 @@ export function createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi, cgi, trackO
     return data;
   }
   const hasMore = p => p.hasmore === true || Number(p.hasmore) === 1;
-  const asPlaylist = (p, mine = false) => ({ id: String(p.tid || p.dissid || p.id || ''), name: p.dirName || p.title || p.dissname || p.name || '', imageUrl: p.bigpicUrl || p.picUrl || p.picurl || p.coverUrl || p.logo || p.albumPicUrl || '', description: p.desc || '', trackCount: Number(p.songNum || p.songnum || p.song_cnt || p.total_song_num || 0), mine });
+  const isEditableOwned = p => Number(p.dirId) > 0 && Number(p.dirId) < 200 && Number(p.dirType) === 0;
+  const asPlaylist = (p, mine = false, fixed = false) => ({ id: String(p.tid || p.dissid || p.id || ''), name: p.dirName || p.title || p.dissname || p.name || '', imageUrl: p.bigpicUrl || p.picUrl || p.picurl || p.coverUrl || p.logo || p.albumPicUrl || '', description: p.desc || '', trackCount: Number(p.songNum || p.songnum || p.song_cnt || p.total_song_num || 0), mine, ...(fixed ? { fixed: true } : {}) });
   const owned = async s => array((await call(s, 'music.musicasset.PlaylistBaseRead', 'GetPlaylistByUin', { uin: s.musicid })).v_playlist, 'playlists');
   async function encrypted(s) {
     if (typeof s.encryptUin === 'string' && s.encryptUin) return s.encryptUin;
@@ -647,7 +648,7 @@ export function createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi, cgi, trackO
     const s = await account(true);
     if (!s) return [];
     const euin = await encrypted(s);
-    const own = (await owned(s)).map(p => asPlaylist(p, Number(p.dirId) > 0 && Number(p.dirId) < 200 && Number(p.dirType) === 0)).filter(p => p.id);
+    const own = (await owned(s)).map(p => asPlaylist(p, true, !isEditableOwned(p))).filter(p => p.id);
     const saved = [], seen = new Set();
     for (let offset = 0; offset < 10000;) {
       const page = await call(s, 'music.musicasset.PlaylistFavRead', 'CgiGetPlaylistFavInfo', { uin: euin, offset, size: 100 });
@@ -692,7 +693,7 @@ export function createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi, cgi, trackO
       if (items.length) seen.add(items[0].id);
       result.push(...items);
       const total = Number(data.total_song_num || 0);
-      if (!hasMore(data) && (total === 0 || result.length >= total)) return { ...asPlaylist({ ...(first.dirinfo || {}), tid: pid, total_song_num: first.total_song_num }, Number(entry.dirId) > 0 && Number(entry.dirId) < 200 && Number(entry.dirType) === 0), tracks: result };
+      if (!hasMore(data) && (total === 0 || result.length >= total)) return { ...asPlaylist({ ...(first.dirinfo || {}), tid: pid, total_song_num: first.total_song_num }, true, !isEditableOwned(entry)), tracks: result };
       if (!items.length) throw new Error('QQ Music playlist incomplete');
       offset += items.length;
     }
@@ -756,9 +757,11 @@ export function createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi, cgi, trackO
     if (typeof qqAuthCgi !== 'function') throw new Error('Authenticated QQ Music CGI is required');
     const body = checked(await qqAuthCgi('/fav/fcgi-bin/fcg_get_profile_order_asset.fcg', { ct: 20, cid: 205360956, userid: s.musicid, reqtype: 2, sin: offset, ein: offset + 19 }, s));
     const data = body.data;
-    if (!data || !Number.isSafeInteger(data.totalalbum) || data.totalalbum < 0) throw new Error('QQ Music missing saved album total');
+    const total = Number(data?.totalalbum);
+    // The asset CGI serializes some totals as decimal strings.
+    if (!data || !Number.isSafeInteger(total) || total < 0) throw new Error('QQ Music missing saved album total');
     const entries = array(data.albumlist, 'saved albums');
-    if (!entries.length && offset < data.totalalbum) throw new Error('QQ Music saved albums incomplete');
+    if (!entries.length && offset < total) throw new Error('QQ Music saved albums incomplete');
     const albums = entries.map(a => {
       if (!a || typeof a !== 'object') throw new Error('QQ Music invalid saved album');
       const id = a.albummid || a.album_mid || a.albumMid || a.albumMID || a.mid;
@@ -768,7 +771,7 @@ export function createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi, cgi, trackO
       if (!artists.length && (a.singerName || a.singername || a.singer_name)) artists.push({ id: String(a.singermid || a.singerMid || a.singer_mid || ''), name: a.singerName || a.singername || a.singer_name });
       return { id, name: a.albumname || a.album_name || a.albumName || a.name || a.title || '', imageUrl: a.picurl || a.picUrl || a.albumPicUrl || `https://y.gtimg.cn/music/photo_new/T002R300x300M000${id}.jpg`, artists, released: a.release_time || a.publishDate || a.pubtime || '' };
     });
-    return { albums, more: offset + albums.length < data.totalalbum };
+    return { albums, more: offset + albums.length < total };
   }
   async function saveAlbum({ id, on }) {
     const s = await account();
@@ -787,7 +790,19 @@ export function createLibrary({ qqAuthRpc, qqReadSession, qqAuthCgi, cgi, trackO
     if (!data || data.result !== 0 || !Array.isArray(data.v_failedAlbumId) || !Array.isArray(data.v_failedAlbumMid) || data.v_failedAlbumId.length || data.v_failedAlbumMid.length) throw new Error('QQ Music did not confirm album change');
     if (await read() !== on) throw new Error('QQ Music did not confirm album saved state');
   }
-  return { playlists, playlist, liked, isLiked, like, savedAlbums, saveAlbum, createPlaylist, renamePlaylist, deletePlaylist,
+  async function savePlaylist({ id, on }) {
+    const s = await account();
+    const pid = idNumber(id, 'playlist ID');
+    if (typeof on !== 'boolean') throw new Error('Invalid playlist saved state');
+    const data = await call(s, 'music.musicasset.PlaylistFavWrite', on ? 'FavPlaylist' : 'CancelFavPlaylist', {
+      uin: s.musicid,
+      v_playlistId: [pid],
+    });
+    if (!data || data.result !== 0 || !Array.isArray(data.v_failedPlaylistId) || data.v_failedPlaylistId.length) {
+      throw new Error('QQ Music did not confirm playlist favorite change');
+    }
+  }
+  return { playlists, playlist, liked, isLiked, like, savedAlbums, saveAlbum, savePlaylist, createPlaylist, renamePlaylist, deletePlaylist,
     addToPlaylist: args => editSongs(args, true), removeFromPlaylist: args => editSongs(args, false) };
 }
 
@@ -798,6 +813,7 @@ export const isLiked = qqLibrary.isLiked;
 export const like = qqLibrary.like;
 export const savedAlbums = qqLibrary.savedAlbums;
 export const saveAlbum = qqLibrary.saveAlbum;
+export const savePlaylist = qqLibrary.savePlaylist;
 export const createPlaylist = qqLibrary.createPlaylist;
 export const renamePlaylist = qqLibrary.renamePlaylist;
 export const deletePlaylist = qqLibrary.deletePlaylist;

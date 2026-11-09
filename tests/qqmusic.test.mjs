@@ -171,3 +171,69 @@ test('missing vkey is bounded and does not rotate credentials', async () => {
   assert.equal(keys, 2);
   assert.equal(storage.get(authKey).musickey, session.musickey);
 });
+
+// Special system playlists stay fixed while ordinary user playlists are editable and third-party playlists can be saved.
+test('owned playlists mark system folders fixed and savePlaylist writes favorite status', async () => {
+  const session = { ...initial(), encryptUin: 'encUin' };
+  const methods = [];
+  const { api } = await setup((url, init) => {
+    const body = JSON.parse(init.body);
+    const { module, method, param } = body.req_0;
+    methods.push([module, method, param]);
+    if (method === 'GetPlaylistByUin') {
+      return json(envelope({
+        v_playlist: [
+          { tid: 20100, dirId: 201, dirType: 1, dirName: '我喜欢', songNum: 10 },
+          { tid: 10001, dirId: 1, dirType: 0, dirName: '我的普通歌单', songNum: 3 },
+        ],
+      }));
+    }
+    if (method === 'CgiGetPlaylistFavInfo') {
+      return json(envelope({ v_list: [{ tid: 30001, dissname: '别人歌单', songnum: 5 }], hasmore: 0 }));
+    }
+    if (method === 'FavPlaylist' || method === 'CancelFavPlaylist') {
+      return json(envelope({ result: 0, v_failedPlaylistId: [] }));
+    }
+    throw new Error(`unexpected ${method}`);
+  }, session);
+  const lists = await api.playlists();
+  assert.deepEqual(lists.map(p => [p.id, p.mine, !!p.fixed, !!p.saved]), [
+    ['20100', true, true, false],
+    ['10001', true, false, false],
+    ['30001', false, false, true],
+  ]);
+  await api.savePlaylist({ id: '30001', on: true });
+  await api.savePlaylist({ id: '30001', on: false });
+  assert.deepEqual(methods.slice(-2).map(m => m[1]), ['FavPlaylist', 'CancelFavPlaylist']);
+});
+
+// The saved-album asset CGI may return its total as a decimal string.
+test('saved albums accept decimal string totals and paginate independently', async () => {
+  const offsets = [];
+  const { api } = await setup((url, init) => {
+    assert.match(url, /fcg_get_profile_order_asset\.fcg/);
+    assert.match(init.headers.Cookie, /synthetic-account/);
+    const params = new URL(url).searchParams;
+    assert.equal(params.get('reqtype'), '2');
+    assert.equal(params.get('userid'), '18446744073709551615');
+    const offset = Number(params.get('sin'));
+    offsets.push(offset);
+    assert.equal(Number(params.get('ein')), offset + 19);
+    return json({ code: 0, data: {
+      totalalbum: '21',
+      albumlist: Array.from({ length: offset ? 1 : 20 }, (_, index) => ({
+        albummid: `album${offset + index}`,
+        albumname: `Saved ${offset + index}`,
+        singers: [{ mid: 'artistMID', name: 'Artist' }],
+      })),
+    } });
+  }, initial());
+  const first = await api.savedAlbums({ offset: 0 });
+  assert.equal(first.albums.length, 20);
+  assert.equal(first.albums[0].id, 'album0');
+  assert.equal(first.more, true);
+  const second = await api.savedAlbums({ offset: 20 });
+  assert.equal(second.albums.length, 1);
+  assert.equal(second.more, false);
+  assert.deepEqual(offsets, [0, 20]);
+});

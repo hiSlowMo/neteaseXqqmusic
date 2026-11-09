@@ -327,3 +327,99 @@ test("daily, radar, personalized playlists and continuous FM map to host capabil
   assert.deepEqual(modes, ["DEFAULT", "FAMILIAR", "EXPLORE", "DEFAULT"]);
   await assert.rejects(plugin.stationNext({ id: "unknown" }), { code: "unsupported" });
 });
+
+// Cloud playlist management, collection actions and comment interactions use authenticated endpoints.
+test("playlist editing, collections and comments map to NetEase endpoints and preserve fixed liked playlist", async () => {
+  const seen = [];
+  let manipulateCalls = 0;
+  const { plugin } = await setup(async (url, init) => {
+    if (url.includes("account/get")) return response({ code: 200, profile: { userId: 8, nickname: "Fixture" } });
+    if (url.includes("/api/user/playlist")) {
+      return response({
+        code: 200,
+        more: false,
+        playlist: [
+          { id: 100, name: "我喜欢的音乐", specialType: 5, creator: { userId: 8, nickname: "Fixture" } },
+          { id: 101, name: "自建歌单", specialType: 0, creator: { userId: 8, nickname: "Fixture" } },
+          { id: 102, name: "收藏歌单", specialType: 0, subscribed: true, creator: { userId: 99, nickname: "Other" } },
+        ],
+      });
+    }
+    if (url.includes("/api/album/sublist")) {
+      return response({ code: 200, data: [{ id: 55, name: "Jay", picUrl: "http://p1.music.126.net/a.jpg", artists: [{ id: 7, name: "周杰伦" }] }], hasMore: false });
+    }
+    if (url.includes("/api/v1/album/55")) {
+      return response({ code: 200, album: { id: 55, name: "Jay" }, songs: [] });
+    }
+    if (url.includes("/api/album/detail/dynamic")) {
+      return response({ code: 200, isSub: true });
+    }
+    if (url.includes("/api/v1/artist/7")) {
+      return response({ code: 200, artist: { id: 7, name: "周杰伦", followed: true }, hotSongs: [] });
+    }
+    if (url.includes("/api/artist/albums/7")) {
+      return response({ code: 200, hotAlbums: [], more: false });
+    }
+    if (url.includes("/api/artist/sub")) {
+      assert.equal(init.method, "POST");
+      seen.push(["artist/sub", init.body]);
+      return response({ code: 200 });
+    }
+    const { path, data } = decode(init.body);
+    seen.push([path, data]);
+    if (path === "/api/playlist/create") {
+      return response({ code: 200, id: 103, playlist: { id: 103, name: data.name, creator: { userId: 8, nickname: "Fixture" } } });
+    }
+    if (path === "/api/playlist/manipulate/tracks") {
+      manipulateCalls++;
+      if (manipulateCalls === 1) return response({ code: 512 });
+      return response({ code: 200 });
+    }
+    if (path === "/api/resource/comments/add") {
+      return response({
+        code: 200,
+        comment: { commentId: 9001, content: data.content, time: 1700000000000, likedCount: 0, liked: false, user: { nickname: "Fixture", avatarUrl: "http://p1.music.126.net/u.jpg" } },
+      });
+    }
+    return response({ code: 200 });
+  }, { cookies: { MUSIC_U: "synthetic-session" }, profile: { id: "8", name: "Fixture" } });
+
+  const allPlaylists = await plugin.playlists();
+  assert.deepEqual(allPlaylists.map(p => [p.id, p.mine, p.fixed, p.saved]), [
+    ["100", true, true, false],
+    ["101", true, false, false],
+    ["102", false, false, true],
+  ]);
+
+  const created = await plugin.createPlaylist({ name: "新歌单" });
+  assert.equal(created.id, "103");
+  assert.equal(created.mine, true);
+  assert.equal(created.fixed, false);
+
+  await plugin.renamePlaylist({ id: "101", name: "改名歌单" });
+  await plugin.addToPlaylist({ id: "101", trackIds: ["1", "2"] });
+  assert.equal(manipulateCalls, 2);
+  await plugin.removeFromPlaylist({ id: "101", trackIds: ["2"] });
+  await plugin.deletePlaylist({ id: "101" });
+  await plugin.savePlaylist({ id: "102", on: true });
+
+  const albumDetail = await plugin.album({ id: "55" });
+  assert.equal(albumDetail.album.saved, true);
+  const savedAlbums = await plugin.savedAlbums({ offset: 0 });
+  assert.equal(savedAlbums.albums[0].id, "55");
+  assert.equal(savedAlbums.albums[0].saved, true);
+  await plugin.saveAlbum({ id: "55", on: true });
+
+  const artistDetail = await plugin.artist({ id: "7" });
+  assert.equal(artistDetail.artist.following, true);
+  await plugin.followArtist({ id: "7", on: true });
+  await plugin.subscribeShow({ id: "88", on: true });
+
+  await plugin.likeComment({ trackId: "1", commentId: "500", on: true });
+  const posted = await plugin.postComment({ trackId: "1", text: "好听" });
+  assert.equal(posted.id, "9001");
+  assert.equal(posted.text, "好听");
+  assert.equal(posted.author, "Fixture");
+  assert.ok(seen.some(([path]) => path === "/api/v1/comment/like"));
+  assert.ok(seen.some(([path]) => path === "artist/sub"));
+});

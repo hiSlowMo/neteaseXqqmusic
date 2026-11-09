@@ -66,7 +66,7 @@ test('legacy playlist, recent and catalog titles are restored without losing ide
   const { api, providers, host, settings } = setup({}, storage);
   assert.equal((await api.playlist({ id: 'local:1' })).tracks[0].name, 'May I Ask');
   assert.equal((await api.playlists())[0].tracks[0].name, 'May I Ask');
-  assert.equal((await api.home()).sections[1].playlists[0].tracks[0].name, 'May I Ask');
+  assert.equal((await api.home()).sections.find(section => section.title === '本地混合歌单').playlists[0].tracks[0].name, 'May I Ask');
   assert.equal(api.recent()[0].name, 'May I Ask');
   await api.addToPlaylist({ id: 'local:1', trackIds: [cached.id] });
   await api.played({ id: cached.id });
@@ -336,4 +336,75 @@ test('suggestions retain temporary source scope', async () => {
   settings.set('searchSource', 'netease');
   assert.deepEqual(await api.suggest({ query: 'So' }), ['Song']);
   assert.deepEqual(calls.at(-1), ['netease', 'So']);
+});
+
+// Cloud playlists allow same-provider edits while rejecting cross-provider tracks; collections and comments route by prefix.
+test('cloud playlist editing, collection actions and comment interactions route by provider', async () => {
+  const actions = [];
+  const { api } = setup({
+    netease: {
+      playlists: async () => [
+        { id: '10', name: '我喜欢的音乐', mine: true, fixed: true },
+        { id: '11', name: '自建歌单', mine: true, fixed: false },
+      ],
+      createPlaylist: async ({ name }) => { actions.push(['netease:create', name]); return { id: '12', name, mine: true }; },
+      renamePlaylist: async ({ id, name }) => { actions.push(['netease:rename', id, name]); },
+      deletePlaylist: async ({ id }) => { actions.push(['netease:delete', id]); },
+      addToPlaylist: async ({ id, trackIds }) => { actions.push(['netease:add', id, trackIds]); },
+      removeFromPlaylist: async ({ id, trackIds }) => { actions.push(['netease:remove', id, trackIds]); },
+      savePlaylist: async ({ id, on }) => { actions.push(['netease:savePlaylist', id, on]); },
+      followArtist: async ({ id, on }) => { actions.push(['netease:followArtist', id, on]); },
+      shows: async () => [{ id: '70', name: 'Podcast N', subscribed: true }],
+      show: async ({ id, offset }) => ({ show: { id, name: 'Podcast N', subscribed: true }, episodes: [{ ...song('program:1:2', 'Ep 1'), showId: id }], more: false }),
+      subscribeShow: async ({ id, on }) => { actions.push(['netease:subscribeShow', id, on]); },
+      likeComment: async ({ trackId, commentId, on }) => { actions.push(['netease:likeComment', trackId, commentId, on]); },
+      postComment: async ({ trackId, text }) => { actions.push(['netease:postComment', trackId, text]); return { id: '99', author: 'Me', text }; },
+    },
+    qqmusic: {
+      savePlaylist: async ({ id, on }) => { actions.push(['qqmusic:savePlaylist', id, on]); },
+    },
+  });
+
+  const lists = await api.playlists();
+  assert.deepEqual(lists.map(p => [p.id, p.mine, p.fixed]), [
+    ['netease:10', true, true],
+    ['netease:11', true, false],
+  ]);
+
+  const createdCloud = await api.createPlaylist({ name: '网易云：新云端歌单' });
+  assert.equal(createdCloud.id, 'netease:12');
+  assert.equal(createdCloud.fixed, false);
+
+  await api.addToPlaylist({ id: 'netease:11', trackIds: ['netease:1', 'netease:2'] });
+  await assert.rejects(api.addToPlaylist({ id: 'netease:11', trackIds: ['qqmusic:1'] }), { code: 'unsupported' });
+  await api.removeFromPlaylist({ id: 'netease:11', trackIds: ['netease:2'] });
+  await api.renamePlaylist({ id: 'netease:11', name: '网易云 · 重命名后' });
+  await api.deletePlaylist({ id: 'netease:11' });
+  await api.savePlaylist({ id: 'qqmusic:300', on: true });
+
+  await api.followArtist({ id: 'netease:7', on: true });
+
+  const shows = await api.shows();
+  assert.equal(shows[0].id, 'netease:70');
+  const showPage = await api.show({ id: 'netease:70', offset: 0 });
+  assert.equal(showPage.show.id, 'netease:70');
+  assert.equal(showPage.episodes[0].showId, 'netease:70');
+  await api.subscribeShow({ id: 'netease:70', on: true });
+
+  await api.likeComment({ trackId: 'netease:1', commentId: '500', on: true });
+  const comment = await api.postComment({ trackId: 'netease:1', text: '赞' });
+  assert.equal(comment.text, '赞');
+
+  assert.deepEqual(actions, [
+    ['netease:create', '新云端歌单'],
+    ['netease:add', '11', ['1', '2']],
+    ['netease:remove', '11', ['2']],
+    ['netease:rename', '11', '重命名后'],
+    ['netease:delete', '11'],
+    ['qqmusic:savePlaylist', '300', true],
+    ['netease:followArtist', '7', true],
+    ['netease:subscribeShow', '70', true],
+    ['netease:likeComment', '1', '500', true],
+    ['netease:postComment', '1', '赞'],
+  ]);
 });

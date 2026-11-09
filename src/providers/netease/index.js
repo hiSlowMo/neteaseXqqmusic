@@ -137,8 +137,14 @@ async function request(path, params = {}, options = {}) {
     headers.Cookie = Object.keys(header).map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(header[key])}`).join("; ");
   } else {
     url = SITE + path;
-    const query = new URLSearchParams(params).toString();
-    if (query) url += `?${query}`;
+    if (options.method === "POST") {
+      init.method = "POST";
+      init.body = new URLSearchParams(params).toString();
+      headers["Content-Type"] = "application/x-www-form-urlencoded";
+    } else {
+      const query = new URLSearchParams(params).toString();
+      if (query) url += `?${query}`;
+    }
     const cookie = cookieHeader(activeSession.cookies);
     if (cookie) headers.Cookie = cookie;
   }
@@ -190,7 +196,10 @@ async function request(path, params = {}, options = {}) {
 const eapi = (path, params, options = {}) => request(path, params, { ...options, eapi: true });
 
 function toArtist(artist = {}) {
-  return { id: String(artist.id || ""), name: artist.name || "", imageUrl: secureURL(artist.img1v1Url || artist.picUrl) };
+  return {
+    id: String(artist.id || ""), name: artist.name || "", imageUrl: secureURL(artist.img1v1Url || artist.picUrl),
+    ...(artist.followed ? { following: true } : {}),
+  };
 }
 
 function toAlbum(album = {}) {
@@ -199,6 +208,7 @@ function toAlbum(album = {}) {
     id: String(album.id || ""), name: album.name || "", imageUrl: secureURL(album.picUrl),
     artists: (album.artists || (album.artist ? [album.artist] : [])).map(toArtist),
     released: date > 0 ? new Date(date).toISOString().slice(0, 10) : "",
+    ...(album.isSub ? { saved: true } : {}),
   };
 }
 
@@ -215,12 +225,14 @@ function toTrack(track) {
 }
 
 function toPlaylist(playlist) {
+  const mine = !!session?.profile && String(playlist.creator?.userId) === session.profile.id;
   return {
     id: String(playlist.id), name: playlist.name || "",
     imageUrl: secureURL(playlist.coverImgUrl || playlist.picUrl),
     description: playlist.description || "", owner: playlist.creator?.nickname || "",
     trackCount: playlist.trackCount || 0, saved: !!playlist.subscribed,
-    mine: !!session?.profile && String(playlist.creator?.userId) === session.profile.id,
+    mine,
+    fixed: mine && Number(playlist.specialType) === 5,
   };
 }
 
@@ -449,6 +461,7 @@ export async function playlists() {
 }
 
 export async function playlist({ id }) {
+  if (currentSession().cookies.MUSIC_U && !session.profile) await account();
   const data = await request("/api/v6/playlist/detail", { id: idOf(id), n: PLAYLIST_LIMIT });
   if (!data.playlist) throw fail("unavailable", "歌单不存在或当前账号无权访问");
   const source = data.playlist;
@@ -459,6 +472,65 @@ export async function playlist({ id }) {
     result.description += `\n本版本载入前 ${PLAYLIST_LIMIT} 首（歌单共 ${source.trackCount} 首）。`;
   }
   return result;
+}
+
+export async function createPlaylist({ name }) {
+  const profile = await requireAccount();
+  const trimmed = String(name || "").trim();
+  if (!trimmed) throw new Error("请输入歌单名称");
+  const data = await eapi("/api/playlist/create", { name: trimmed, privacy: "0", type: "NORMAL" });
+  const created = data.playlist || {};
+  const id = String(created.id || data.id || "");
+  if (!id) throw new Error("网易云未返回新歌单标识");
+  return {
+    ...toPlaylist({
+      ...created,
+      id,
+      name: created.name || trimmed,
+      creator: created.creator || { userId: profile.id, nickname: profile.name },
+    }),
+    mine: true,
+    fixed: false,
+  };
+}
+
+export async function renamePlaylist({ id, name }) {
+  await requireAccount();
+  const trimmed = String(name || "").trim();
+  if (!trimmed) throw new Error("请输入歌单名称");
+  await eapi("/api/playlist/update/name", { id: idOf(id), name: trimmed });
+}
+
+export async function deletePlaylist({ id }) {
+  await requireAccount();
+  await eapi("/api/playlist/remove", { ids: `[${idOf(id)}]` });
+}
+
+async function manipulatePlaylist(op, { id, trackIds }) {
+  await requireAccount();
+  const pid = idOf(id);
+  if (!Array.isArray(trackIds) || !trackIds.length) throw new Error("请选择要操作的歌曲");
+  const ids = trackIds.map((trackId) => {
+    const identity = trackIdentity(trackId);
+    if (identity.program) throw fail("unsupported", "暂不支持将播客节目加入歌单");
+    return Number(identity.audio);
+  });
+  const send = (list) => eapi("/api/playlist/manipulate/tracks", {
+    op, pid, trackIds: JSON.stringify(list), imme: "true",
+  }, { codes: [200, 502, 512] });
+  let data = await send(ids);
+  if (Number(data.code) === 512) data = await send([...ids, ...ids]);
+  if (Number(data.code) === 502) return;
+  if (Number(data.code) !== 200) throw new Error(`网易云歌单操作失败（${data.code}）`);
+}
+
+export const addToPlaylist = (args) => manipulatePlaylist("add", args);
+export const removeFromPlaylist = (args) => manipulatePlaylist("del", args);
+
+export async function savePlaylist({ id, on }) {
+  await requireAccount();
+  if (typeof on !== "boolean") throw new Error("无效的歌单收藏状态");
+  await eapi(on ? "/api/playlist/subscribe" : "/api/playlist/unsubscribe", { id: idOf(id) });
 }
 
 export async function shows() {
@@ -493,10 +565,37 @@ export async function show({ id, offset = 0 }) {
   };
 }
 
+export async function subscribeShow({ id, on }) {
+  await requireAccount();
+  if (typeof on !== "boolean") throw new Error("无效的播客订阅状态");
+  await eapi(on ? "/api/djradio/sub" : "/api/djradio/unsub", { id: idOf(id) });
+}
+
 export async function album({ id }) {
-  const data = await request(`/api/v1/album/${idOf(id)}`);
+  const albumId = idOf(id);
+  const signedIn = !!currentSession().cookies.MUSIC_U;
+  const [data, dynamic] = await Promise.all([
+    request(`/api/v1/album/${albumId}`),
+    signedIn ? request("/api/album/detail/dynamic", { id: albumId }, { keepSession: true }).catch(() => null) : null,
+  ]);
   if (!data.album) throw fail("unavailable", "专辑不可用");
-  return { album: toAlbum(data.album), tracks: (await songDetails((data.songs || []).map((song) => song.id), data.songs || [])).map(toTrack) };
+  const result = toAlbum(data.album);
+  if (typeof dynamic?.isSub === "boolean") result.saved = dynamic.isSub;
+  return { album: result, tracks: (await songDetails((data.songs || []).map((song) => song.id), data.songs || [])).map(toTrack) };
+}
+
+export async function savedAlbums({ offset = 0 } = {}) {
+  await requireAccount();
+  offset = pageOffset(offset);
+  const data = await request("/api/album/sublist", { limit: PAGE_SIZE, offset, total: "true" }, { keepSession: true });
+  const items = (data.data || []).map((item) => ({ ...toAlbum(item), saved: true }));
+  return { albums: items, more: !!data.hasMore };
+}
+
+export async function saveAlbum({ id, on }) {
+  await requireAccount();
+  if (typeof on !== "boolean") throw new Error("无效的专辑收藏状态");
+  await eapi(on ? "/api/album/sub" : "/api/album/unsub", { id: idOf(id) });
 }
 
 async function artistAlbums(id) {
@@ -527,6 +626,16 @@ export async function artist({ id }) {
     artist: toArtist(detail.artist), albums,
     tracks: (await songDetails((detail.hotSongs || []).map((song) => song.id), detail.hotSongs || [])).map(toTrack),
   };
+}
+
+export async function followArtist({ id, on }) {
+  await requireAccount();
+  if (typeof on !== "boolean") throw new Error("无效的歌手关注状态");
+  const artistId = idOf(id);
+  // Desktop eapi /api/artist/sub is rejected with -460; use the web form endpoint.
+  await request(on ? "/api/artist/sub" : "/api/artist/unsub", {
+    artistId, artistIds: `[${artistId}]`,
+  }, { method: "POST" });
 }
 
 async function likedIDs() {
@@ -574,6 +683,37 @@ export async function comments({ trackId, offset = 0 }) {
   // Hot comments overlap the chronological list. Adding them here would make
   // the host skip comments when it advances by the number already displayed.
   return { comments: (data.comments || []).map(toComment), total: data.total || 0, more: !!data.more };
+}
+
+export async function likeComment({ trackId, commentId, on }) {
+  await requireAccount();
+  if (typeof on !== "boolean") throw new Error("无效的评论点赞状态");
+  const identity = trackIdentity(trackId);
+  await eapi(on ? "/api/v1/comment/like" : "/api/v1/comment/unlike", {
+    threadId: identity.thread,
+    commentId: idOf(commentId),
+  });
+}
+
+export async function postComment({ trackId, text }) {
+  const profile = await requireAccount();
+  const content = String(text || "").trim();
+  if (!content) throw new Error("评论内容不能为空");
+  const identity = trackIdentity(trackId);
+  const data = await eapi("/api/resource/comments/add", {
+    threadId: identity.thread,
+    content,
+  });
+  if (data.comment) return toComment(data.comment);
+  return {
+    id: String(data.id || Date.now()),
+    author: profile.name || "",
+    avatarUrl: profile.imageUrl || "",
+    text: content,
+    time: Date.now(),
+    likes: 0,
+    liked: false,
+  };
 }
 
 export async function lyrics({ id }) {
