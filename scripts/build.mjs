@@ -1,15 +1,16 @@
 import { build } from 'esbuild';
-import { copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const manifest = JSON.parse(await readFile(resolve(root, 'plugin.json'), 'utf8'));
 await mkdir(resolve(root, 'dist'), { recursive: true });
 await build({
   absWorkingDir: root, entryPoints: ['src/index.js'], bundle: true,
   format: 'esm', platform: 'browser', target: 'es2020',
   outfile: resolve(root, 'dist/index.js'), legalComments: 'inline',
-  banner: { js: '// NetEaseXQQMusic 0.1.2 — AGPL-3.0-only; full source and notices included.' },
+  banner: { js: `// NetEaseXQQMusic ${manifest.version} — AGPL-3.0-only; full source and notices included.` },
 });
 await mkdir(resolve(root, 'licenses'), { recursive: true });
 for (const [source, target] of [

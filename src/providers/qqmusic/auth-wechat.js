@@ -25,7 +25,7 @@ function secureRandom(deps) { const fn=deps.randomBytes||(globalThis.crypto&&glo
 function digits(random,n){let s='';while(s.length<n)for(const b of random(n-s.length))if(b<250)s+=String(b%10);return s;}
 function rsa(random,message){if(typeof BigInt!=='function')throw new Error('WeChat login requires BigInt');const pad=[];while(pad.length<109)for(const b of random(109-pad.length))if(b)pad.push(b);let v=BigInt('0x'+hex([0,2,...pad,0,...bytes(message)])),n=BigInt('0x'+MOD),out=BigInt(1),e=65537;while(e){if(e%2)out=out*v%n;v=v*v%n;e=Math.floor(e/2);}const h=out.toString(16).padStart(256,'0'),a=[];for(let i=0;i<h.length;i+=2)a.push(parseInt(h.slice(i,i+2),16));return b64(a);}
 function device(random){const androidId=hex(random(8)),openUdid=hex(random(16)),base=digits(random,14);let sum=0;for(let i=0;i<14;i++){let n=Number(base[i]);if(i%2){n*=2;if(n>9)n-=9;}sum+=n;}return {androidId,openUdid,imei:base+(10-sum%10)%10,qimei:'',qimei36:'',uid:'',sid:''};}
-export function wechatDeviceComm(d){return {ct:11,cv:14090008,v:14090008,chid:'10003505',tmeAppID:'qqmusic',QIMEI:d.qimei,QIMEI36:d.qimei36,OpenUDID:d.openUdid,udid:d.openUdid,OpenUDID2:d.openUdid,aid:d.androidId,os_ver:'10',phonetype:'MI 6',devicelevel:'29',newdevicelevel:'29',rom:'xiaomi/iarim/sagit:10/eomam.200122.001/2001221:user/release-keys',...(d.uid?{uid:d.uid,sid:d.sid}:{})};}
+export function wechatDeviceComm(d){return {ct:11,cv:d.clientVersion||14090008,v:d.clientVersion||14090008,chid:'10003505',tmeAppID:'qqmusic',QIMEI:d.qimei,QIMEI36:d.qimei36,OpenUDID:d.openUdid,udid:d.openUdid,OpenUDID2:d.openUdid,aid:d.androidId,os_ver:'10',phonetype:'MI 6',devicelevel:'29',newdevicelevel:'29',rom:'xiaomi/iarim/sagit:10/eomam.200122.001/2001221:user/release-keys',...(d.uid?{uid:d.uid,sid:d.sid}:{})};}
 const comm = wechatDeviceComm;
 function envelope(d,random,now){
   const appKey='0AND0HD6FE4HY80F',key=hex(random(8)),nonce=hex(random(8)),first=digits(random,6),second=digits(random,9),month=now.toISOString().slice(0,7),dated=[1,2,13,14,17,18,21,22,25,26,29,30,33,34,37,38];
@@ -47,13 +47,21 @@ function session(data,d){const id=data.str_musicid||data.musicid,type=data.login
 async function request(fetch,url,options={}){const res=await fetch(url,options);if(!res||res.status<200||res.status>=300)throw new Error('WeChat login HTTP '+(res&&res.status));return res;}
 function query(p){return Object.keys(p).map(k=>encodeURIComponent(k)+'='+encodeURIComponent(p[k])).join('&');}
 
-// fetch must retain the WeChat cookies across open.weixin.qq.com and its poll host.
-export async function wechatSignIn(deps){
-  if(!deps||['fetch','prompt','sleep','decodeQR'].some(k=>typeof deps[k]!=='function'))throw new Error('Missing WeChat login dependency');
+// Shared anonymous device bootstrap; neither QR flow publishes credentials here.
+export async function prepareQQDevice(deps){
   const random=secureRandom(deps),d=device(random),fetch=deps.fetch;let now=new Date();
   for(let attempt=0;attempt<2;attempt++){const env=envelope(d,random,now),res=await request(fetch,'https://api.tencentmusic.com/tme/trpc/proxy',{method:'POST',headers:env.headers,body:env.body});const outer=object(await res.json()),inner=object(outer&&outer.data),data=object(inner&&inner.data);if(data&&data.q16&&data.q36){d.qimei=String(data.q16);d.qimei36=String(data.q36);break;}const date=res.headers&&res.headers.get&&Date.parse(res.headers.get('date'));if(!attempt&&Number.isFinite(date)&&Math.abs(now.getTime()-date)>60000){now=new Date(date);continue;}throw new Error('Device bootstrap did not return QIMEI');}
   const headers={'Content-Type':'application/json','User-Agent':'QQMusic 14090008(android 10)',Referer:'https://y.qq.com/'};
   let res=await request(fetch,MUSIC,{method:'POST',headers,body:JSON.stringify({comm:comm(d),req_0:{module:'music.getSession.session',method:'GetSession',param:{uid:'',vkey:0,caller:0}}})});const ds=checked(await res.json(),'req_0').session;if(!ds||ds.uid==null||ds.sid==null||!String(ds.uid)||!String(ds.sid))throw new Error('Missing device session');d.uid=String(ds.uid);d.sid=String(ds.sid);
+  return d;
+}
+
+// fetch must retain the WeChat cookies across open.weixin.qq.com and its poll host.
+export async function wechatSignIn(deps){
+  if(!deps||['fetch','prompt','sleep','decodeQR'].some(k=>typeof deps[k]!=='function'))throw new Error('Missing WeChat login dependency');
+  const d=await prepareQQDevice(deps),fetch=deps.fetch;
+  const headers={'Content-Type':'application/json','User-Agent':'QQMusic 14090008(android 10)',Referer:'https://y.qq.com/'};
+  let res;
   const pageURL=CONNECT+'?'+query({appid:APP,redirect_uri:'https://y.qq.com/portal/wx_redirect.html?login_type=2&surl=https://y.qq.com/',response_type:'code',scope:'snsapi_login',state:'STATE',href:'https://y.qq.com/mediastyle/music_v17/src/css/popup_wechat.css#wechat_redirect'});
   res=await request(fetch,pageURL,{headers:{'User-Agent':'Mozilla/5.0'}});const page=await res.text(),match=/(?:uuid=|\/connect\/qrcode\/)([A-Za-z0-9_-]+)/.exec(page);if(!match)throw new Error('Missing WeChat QR identifier');const uuid=match[1];
   res=await request(fetch,'https://open.weixin.qq.com/connect/qrcode/'+uuid,{headers:{'User-Agent':'Mozilla/5.0',Referer:CONNECT}});const qr=await deps.decodeQR(new Uint8Array(await res.arrayBuffer()));if(typeof qr!=='string'||!qr)throw new Error('Cannot decode WeChat QR image');await deps.prompt({qr,text:'请使用微信扫码登录'});

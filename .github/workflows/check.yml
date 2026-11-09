@@ -16,11 +16,20 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: native/qqmusic-login/go.sum
       - run: npm ci --ignore-scripts
+      - run: npm run test:native
+      - run: npm run build:native
+      - run: npm run smoke:native
       - run: npm run test:core
       - run: npm run build
       - name: Check committed bundle matches source
         run: git diff --exit-code -- dist/index.js
       - run: npm run pack
       - name: Verify release archive
-        run: unzip -t releases/neteaseXqqmusic-*.zip
+        run: |
+          unzip -t releases/neteaseXqqmusic-*.zip
+          python3 -I scripts/verify-package.py releases/neteaseXqqmusic-*.zip

@@ -1,4 +1,4 @@
-// NetEaseXQQMusic 0.1.2 — AGPL-3.0-only; full source and notices included.
+// NetEaseXQQMusic 0.1.4 — AGPL-3.0-only; full source and notices included.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -11162,6 +11162,14 @@ function providerHost(provider) {
       md5: (text) => globalThis.host.crypto.md5(text),
       aesEcbEncrypt: (key, text) => globalThis.host.crypto.aesEcbEncrypt(key, text)
     },
+    // Accessors keep older/mocked hosts usable until App login is selected.
+    get platform() {
+      return globalThis.host.platform;
+    },
+    get arch() {
+      return globalThis.host.arch;
+    },
+    spawn: (command, args) => globalThis.host.spawn(command, args),
     signInPrompt: (prompt) => globalThis.host.signInPrompt(prompt),
     t: (text) => globalThis.host.t(text),
     language: () => globalThis.host.language()
@@ -11918,6 +11926,36 @@ function createSessionStore({ storage, refresh, now = () => Date.now() }) {
   return { read, set, clear, run, version: () => epoch2, ready: async () => (await readySnapshot()).session };
 }
 
+// src/stream-cache.js
+function createStreamCache({ version, load, ttl = 3e4, now = () => Date.now(), limit = 64 }) {
+  const pending = /* @__PURE__ */ new Map();
+  const resolved = /* @__PURE__ */ new Map();
+  async function stream4(id, quality) {
+    const generation = version();
+    const key = `${generation}\0${id}\0${quality}`;
+    const hit = resolved.get(key);
+    if (hit && now() - hit.at < ttl) return { ...hit.value };
+    resolved.delete(key);
+    if (pending.has(key)) return { ...await pending.get(key) };
+    const promise = load(id, quality);
+    pending.set(key, promise);
+    try {
+      const value = await promise;
+      if (version() === generation) {
+        resolved.set(key, { value, at: now() });
+        if (resolved.size > limit) resolved.delete(resolved.keys().next().value);
+      }
+      return { ...value };
+    } finally {
+      if (pending.get(key) === promise) pending.delete(key);
+    }
+  }
+  return { stream: stream4, clear() {
+    resolved.clear();
+    pending.clear();
+  } };
+}
+
 // src/providers/qqmusic/http.js
 async function qqFetch(address, options = {}) {
   const controller = new AbortController();
@@ -12227,7 +12265,7 @@ function device(random) {
   return { androidId, openUdid, imei: base + (10 - sum % 10) % 10, qimei: "", qimei36: "", uid: "", sid: "" };
 }
 function wechatDeviceComm(d) {
-  return { ct: 11, cv: 14090008, v: 14090008, chid: "10003505", tmeAppID: "qqmusic", QIMEI: d.qimei, QIMEI36: d.qimei36, OpenUDID: d.openUdid, udid: d.openUdid, OpenUDID2: d.openUdid, aid: d.androidId, os_ver: "10", phonetype: "MI 6", devicelevel: "29", newdevicelevel: "29", rom: "xiaomi/iarim/sagit:10/eomam.200122.001/2001221:user/release-keys", ...d.uid ? { uid: d.uid, sid: d.sid } : {} };
+  return { ct: 11, cv: d.clientVersion || 14090008, v: d.clientVersion || 14090008, chid: "10003505", tmeAppID: "qqmusic", QIMEI: d.qimei, QIMEI36: d.qimei36, OpenUDID: d.openUdid, udid: d.openUdid, OpenUDID2: d.openUdid, aid: d.androidId, os_ver: "10", phonetype: "MI 6", devicelevel: "29", newdevicelevel: "29", rom: "xiaomi/iarim/sagit:10/eomam.200122.001/2001221:user/release-keys", ...d.uid ? { uid: d.uid, sid: d.sid } : {} };
 }
 var comm = wechatDeviceComm;
 function envelope(d, random, now) {
@@ -12271,8 +12309,7 @@ async function request2(fetch2, url, options = {}) {
 function query2(p) {
   return Object.keys(p).map((k) => encodeURIComponent(k) + "=" + encodeURIComponent(p[k])).join("&");
 }
-async function wechatSignIn(deps) {
-  if (!deps || ["fetch", "prompt", "sleep", "decodeQR"].some((k) => typeof deps[k] !== "function")) throw new Error("Missing WeChat login dependency");
+async function prepareQQDevice(deps) {
   const random = secureRandom(deps), d = device(random), fetch2 = deps.fetch;
   let now = /* @__PURE__ */ new Date();
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -12296,6 +12333,13 @@ async function wechatSignIn(deps) {
   if (!ds || ds.uid == null || ds.sid == null || !String(ds.uid) || !String(ds.sid)) throw new Error("Missing device session");
   d.uid = String(ds.uid);
   d.sid = String(ds.sid);
+  return d;
+}
+async function wechatSignIn(deps) {
+  if (!deps || ["fetch", "prompt", "sleep", "decodeQR"].some((k) => typeof deps[k] !== "function")) throw new Error("Missing WeChat login dependency");
+  const d = await prepareQQDevice(deps), fetch2 = deps.fetch;
+  const headers2 = { "Content-Type": "application/json", "User-Agent": "QQMusic 14090008(android 10)", Referer: "https://y.qq.com/" };
+  let res;
   const pageURL = CONNECT + "?" + query2({ appid: APP, redirect_uri: "https://y.qq.com/portal/wx_redirect.html?login_type=2&surl=https://y.qq.com/", response_type: "code", scope: "snsapi_login", state: "STATE", href: "https://y.qq.com/mediastyle/music_v17/src/css/popup_wechat.css#wechat_redirect" });
   res = await request2(fetch2, pageURL, { headers: { "User-Agent": "Mozilla/5.0" } });
   const page = await res.text(), match = /(?:uuid=|\/connect\/qrcode\/)([A-Za-z0-9_-]+)/.exec(page);
@@ -12333,6 +12377,208 @@ async function refreshWechatSession(previous, fetch2) {
   const next = session3(checked(await response.json(), "req"), previous.device);
   for (const key of ["openid", "refresh_token", "unionid", "refresh_key", "nick", "logo", "encryptUin"]) if (!next[key] && previous[key]) next[key] = previous[key];
   return next;
+}
+
+// src/providers/qqmusic/auth-app.js
+var API = "https://u.y.qq.com/cgi-bin/musicu.fcg";
+var VERSION = 20090008;
+var MAX_LINE = 65536;
+var supported = /* @__PURE__ */ new Set(["darwin-arm64", "darwin-amd64", "linux-arm64", "linux-amd64", "windows-arm64", "windows-amd64"]);
+var failure = (message, code = "signIn") => Object.assign(new Error(message), { code, appLogin: true });
+function appHelperPath(platform, arch) {
+  const target = `${platform}-${arch}`;
+  if (!supported.has(target)) throw failure("\u6B64\u7CFB\u7EDF\u6682\u672A\u63D0\u4F9B QQ \u97F3\u4E50 App \u626B\u7801\u7A0B\u5E8F\uFF0C\u8BF7\u9009 qq \u6216 wechat \u626B\u7801", "setup");
+  return `bin/qqmusic-login-${target}${platform === "windows" ? ".exe" : ""}`;
+}
+function entropyRandom(hex2) {
+  if (typeof hex2 !== "string" || !/^[0-9a-f]{8192}$/.test(hex2)) throw failure("\u626B\u7801\u7A0B\u5E8F\u672A\u63D0\u4F9B\u6709\u6548\u968F\u673A\u6570\u636E");
+  let offset = 0;
+  return (n) => {
+    if (!Number.isSafeInteger(n) || n < 0 || offset + n * 2 > hex2.length) throw failure("\u626B\u7801\u968F\u673A\u6570\u636E\u4E0D\u8DB3\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+    const bytes2 = new Uint8Array(n);
+    for (let i = 0; i < n; i++) bytes2[i] = parseInt(hex2.slice(offset + i * 2, offset + i * 2 + 2), 16);
+    offset += n * 2;
+    return bytes2;
+  };
+}
+function musicID(value) {
+  if (typeof value === "number" && !Number.isSafeInteger(value)) throw failure("QQ \u97F3\u4E50\u8FD4\u56DE\u4E86\u65E0\u6548\u8D26\u53F7\u6807\u8BC6");
+  if (!["string", "number"].includes(typeof value) || !/^\d{1,20}$/.test(String(value)) || !/[1-9]/.test(String(value))) throw failure("QQ \u97F3\u4E50\u8FD4\u56DE\u4E86\u65E0\u6548\u8D26\u53F7\u6807\u8BC6");
+  return String(value);
+}
+function token(value) {
+  if (typeof value !== "string" || !value || value.length > 16384 || /[;\s\x00-\x1f\x7f]/.test(value)) throw failure("QQ \u97F3\u4E50\u672A\u8FD4\u56DE\u6709\u6548\u6388\u6743");
+  return value;
+}
+function appSession(data, device2, expectedID, now = Date.now()) {
+  const id = musicID(data?.str_musicid || data?.musicid);
+  if (id !== expectedID) throw failure("QQ \u97F3\u4E50\u8FD4\u56DE\u7684\u8D26\u53F7\u4E0D\u4E00\u81F4\uFF0C\u8BF7\u91CD\u8BD5");
+  const key = token(data.musickey);
+  const type = data.loginType == null ? key.startsWith("W_X") ? 1 : 2 : Number(data.loginType);
+  if (![1, 2].includes(type)) throw failure("QQ \u97F3\u4E50\u8FD4\u56DE\u4E86\u6682\u4E0D\u652F\u6301\u7684\u8D26\u53F7\u7C7B\u578B\uFF0C\u8BF7\u9009 qq \u6216 wechat \u767B\u5F55");
+  const created = Number(data.musickeyCreateTime), expires = Number(data.keyExpiresIn);
+  if (created > 0 && expires > 0 && now / 1e3 >= created + expires) throw failure("QQ \u97F3\u4E50\u8FD4\u56DE\u7684\u767B\u5F55\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u626B\u7801");
+  const result = { musicid: id, musickey: key, loginType: type, device: device2 };
+  for (const field of ["openid", "refresh_token", "access_token", "unionid", "refresh_key", "nick", "logo", "encryptUin", "musickeyCreateTime", "keyExpiresIn"]) {
+    if (data[field] !== void 0) result[field] = data[field];
+  }
+  return result;
+}
+function decodeImage(value) {
+  if (typeof value !== "string" || value.length > 2 * 1024 * 1024) throw failure("QQ \u97F3\u4E50\u672A\u8FD4\u56DE\u6709\u6548\u4E8C\u7EF4\u7801");
+  const encoded = value.slice(value.lastIndexOf(",") + 1);
+  if (!encoded || encoded.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) throw failure("QQ \u97F3\u4E50\u672A\u8FD4\u56DE\u6709\u6548\u4E8C\u7EF4\u7801");
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const bytes2 = [];
+  let bits = 0, buffer = 0;
+  for (const c of encoded.replace(/=+$/, "")) {
+    buffer = buffer << 6 | alphabet.indexOf(c);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes2.push(buffer >> bits & 255);
+    }
+  }
+  if (bytes2.length < 8 || ![137, 80, 78, 71, 13, 10, 26, 10].every((b, i) => bytes2[i] === b)) throw failure("QQ \u97F3\u4E50\u8FD4\u56DE\u7684\u4E8C\u7EF4\u7801\u4E0D\u662F PNG");
+  return new Uint8Array(bytes2);
+}
+async function qqMusicAppSignIn(deps) {
+  const path = appHelperPath(deps.platform, deps.arch);
+  if (deps.signal?.aborted) throw failure("QQ \u97F3\u4E50 App \u767B\u5F55\u5DF2\u53D6\u6D88");
+  let child;
+  try {
+    child = await deps.spawn(path, []);
+  } catch {
+    throw failure("\u65E0\u6CD5\u542F\u52A8\u5185\u7F6E\u626B\u7801\u7A0B\u5E8F\u3002\u8BF7\u5728 MyGo \u7684\u63D2\u4EF6\u8BBE\u7F6E\u4E2D\u5141\u8BB8\u6B64\u63D2\u4EF6\u8FD0\u884C\u7A0B\u5E8F\uFF0C\u5E76\u786E\u8BA4\u5DF2\u5B89\u88C5\u5B8C\u6574 ZIP\uFF1B\u4E5F\u53EF\u9009 qq \u6216 wechat \u626B\u7801", "setup");
+  }
+  const controller = new AbortController();
+  let active = true, stopped = false, timeout, startupTimer, abort;
+  const check = () => {
+    if (!active || deps.signal?.aborted || deps.isCurrent && !deps.isCurrent()) throw failure("\u8D26\u53F7\u5DF2\u6539\u53D8\u6216\u767B\u5F55\u5DF2\u53D6\u6D88\uFF0C\u8BF7\u91CD\u8BD5");
+  };
+  const read = async () => {
+    const line = await child.readLine();
+    check();
+    if (typeof line !== "string" || !line || line.length > MAX_LINE) throw failure("\u626B\u7801\u7A0B\u5E8F\u5DF2\u7ED3\u675F\u6216\u8FD4\u56DE\u65E0\u6548\u6D88\u606F\uFF0C\u8BF7\u91CD\u8BD5");
+    try {
+      const event = JSON.parse(line);
+      if (!event || typeof event !== "object" || Array.isArray(event) || typeof event.type !== "string") throw new Error();
+      return event;
+    } catch {
+      throw failure("\u626B\u7801\u7A0B\u5E8F\u8FD4\u56DE\u65E0\u6548\u6D88\u606F\uFF0C\u8BF7\u91CD\u8BD5");
+    }
+  };
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    active = false;
+    controller.abort();
+    try {
+      child.write(JSON.stringify({ command: "cancel" }) + "\n");
+    } catch {
+    }
+    try {
+      child.closeStdin();
+    } catch {
+    }
+    try {
+      child.kill();
+    } catch {
+    }
+  };
+  try {
+    const interrupted = new Promise((_, reject) => {
+      abort = () => {
+        stop();
+        reject(failure("QQ \u97F3\u4E50 App \u767B\u5F55\u5DF2\u53D6\u6D88"));
+      };
+      deps.signal?.addEventListener("abort", abort, { once: true });
+      timeout = setTimeout(() => {
+        stop();
+        reject(failure("QQ \u97F3\u4E50 App \u767B\u5F55\u8D85\u65F6\uFF0C\u8BF7\u91CD\u65B0\u626B\u7801"));
+      }, 24e4);
+    });
+    const flow = (async () => {
+      check();
+      const ready = await Promise.race([read(), new Promise((_, reject) => {
+        startupTimer = setTimeout(() => reject(failure("\u5185\u7F6E\u626B\u7801\u7A0B\u5E8F\u542F\u52A8\u8D85\u65F6\uFF0C\u8BF7\u68C0\u67E5\u5B89\u88C5\u5305")), 8e3);
+      })]);
+      clearTimeout(startupTimer);
+      if (ready.type !== "ready") throw failure("\u626B\u7801\u7A0B\u5E8F\u65E0\u6CD5\u542F\u52A8\uFF0C\u8BF7\u91CD\u65B0\u5B89\u88C5\u5B8C\u6574 ZIP", "setup");
+      const randomBytes = entropyRandom(ready.entropy);
+      const fetch2 = (url, options = {}) => {
+        check();
+        return deps.fetch(url, { ...options, signal: controller.signal });
+      };
+      const device2 = await deps.prepareDevice({ fetch: fetch2, randomBytes });
+      check();
+      device2.clientVersion = VERSION;
+      const comm2 = () => Object.fromEntries(Object.entries({ ...deps.deviceComm(device2), ct: 11, cv: VERSION, v: VERSION }).map(([k, v]) => [k, String(v)]));
+      const rpc2 = async (method, param, overrides = {}) => {
+        const response = await fetch2(API, { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": `QQMusic ${VERSION}(android 10)`, Referer: "https://y.qq.com/" }, body: JSON.stringify({ comm: { ...comm2(), ...overrides }, req_0: { module: "music.login.LoginServer", method, param } }) });
+        check();
+        if (!response || response.status < 200 || response.status >= 300) throw failure("QQ \u97F3\u4E50\u767B\u5F55\u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
+        const body = await response.json();
+        check();
+        if (body?.code !== 0 || body.req_0?.code !== 0 || body.req_0.subcode || !body.req_0.data || typeof body.req_0.data !== "object") throw failure("QQ \u97F3\u4E50\u62D2\u7EDD\u4E86\u767B\u5F55\u8BF7\u6C42\uFF0C\u8BF7\u91CD\u65B0\u626B\u7801");
+        return body.req_0.data;
+      };
+      const data = await rpc2("CreateQRCode", { tmeAppID: "qqmusic", ct: 11, cv: VERSION }, { ct: "23", cv: "0" });
+      const id = data.qrcodeID;
+      if (typeof id !== "string" || !id || id.length > 512 || /[\x00-\x1f\x7f#+]/.test(id)) throw failure("QQ \u97F3\u4E50\u8FD4\u56DE\u4E86\u65E0\u6548\u4E8C\u7EF4\u7801\u6807\u8BC6");
+      const qr = await deps.decodeQR(decodeImage(data.qrcode));
+      check();
+      if (typeof qr !== "string" || !qr || qr.length > 8192) throw failure("\u65E0\u6CD5\u8BC6\u522B QQ \u97F3\u4E50 App \u4E8C\u7EF4\u7801\uFF0C\u8BF7\u91CD\u8BD5");
+      child.write(JSON.stringify({ command: "subscribe", qrcodeID: id, timeoutMs: 18e4 }) + "\n");
+      let subscribed = false, scanned = false;
+      while (true) {
+        const event = await read();
+        if (event.type === "subscribed") {
+          if (!subscribed) {
+            subscribed = true;
+            await deps.prompt({ qr, text: "\u8BF7\u4F7F\u7528 QQ \u97F3\u4E50 App \u626B\u7801\u767B\u5F55" });
+            check();
+          }
+        } else if (event.type === "scanned") {
+          if (!subscribed) throw failure("\u626B\u7801\u7A0B\u5E8F\u7684\u6D88\u606F\u987A\u5E8F\u65E0\u6548");
+          if (!scanned) {
+            scanned = true;
+            await deps.prompt({ qr, text: "\u5DF2\u626B\u7801\uFF0C\u8BF7\u5728 QQ \u97F3\u4E50 App \u786E\u8BA4\u767B\u5F55" });
+            check();
+          }
+        } else if (event.type === "cookies") {
+          if (!subscribed) throw failure("\u626B\u7801\u7A0B\u5E8F\u7684\u6D88\u606F\u987A\u5E8F\u65E0\u6548");
+          const account4 = musicID(event.data?.cookies?.qqmusic_uin?.value);
+          const key = token(event.data?.cookies?.qqmusic_key?.value);
+          const numericID = Number(account4);
+          if (!Number.isSafeInteger(numericID)) throw failure("\u6B64\u8D26\u53F7\u6807\u8BC6\u6682\u4E0D\u652F\u6301 App \u626B\u7801\uFF0C\u8BF7\u9009 qq \u6216 wechat \u767B\u5F55");
+          const final = await rpc2("Login", { musicid: numericID, qrCodeID: id, token: key }, { tmeLoginType: "6" });
+          return appSession(final, device2, account4);
+        } else if (event.type === "timeout") throw failure("QQ \u97F3\u4E50 App \u4E8C\u7EF4\u7801\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u626B\u7801");
+        else if (event.type === "canceled") throw failure("\u5DF2\u5728 QQ \u97F3\u4E50 App \u53D6\u6D88\u767B\u5F55");
+        else if (event.type === "error") throw failure("QQ \u97F3\u4E50\u626B\u7801\u8FDE\u63A5\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u540E\u91CD\u8BD5");
+        else throw failure("\u626B\u7801\u7A0B\u5E8F\u8FD4\u56DE\u672A\u77E5\u6D88\u606F\uFF0C\u8BF7\u91CD\u65B0\u5B89\u88C5\u5B8C\u6574 ZIP");
+      }
+    })();
+    return await Promise.race([flow, interrupted]);
+  } catch (e) {
+    if (e?.appLogin) throw e;
+    throw failure("QQ \u97F3\u4E50 App \u767B\u5F55\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u540E\u91CD\u8BD5");
+  } finally {
+    clearTimeout(timeout);
+    clearTimeout(startupTimer);
+    deps.signal?.removeEventListener("abort", abort);
+    stop();
+  }
+}
+
+// src/providers/qqmusic/login-method.js
+function parseQQLoginMethod(value) {
+  const method = String(value || "").trim().toLowerCase();
+  if (!method || method === "qq") return "qq";
+  if (method === "wechat" || method === "\u5FAE\u4FE1") return "wechat";
+  if (["qqmusic", "app", "qq\u97F3\u4E50"].includes(method)) return "qqmusic";
+  throw Object.assign(new Error("QQ \u626B\u7801\u65B9\u5F0F\u8BF7\u586B\u5199 qq\uFF08\u624B\u673A QQ\uFF09\u3001qqmusic\uFF08QQ \u97F3\u4E50 App\uFF09\u6216 wechat\uFF08\u5FAE\u4FE1\uFF09"), { code: "setup" });
 }
 
 // src/providers/qqmusic/qr.js
@@ -15116,7 +15362,8 @@ function wechatCookieFetch(fetch2) {
 // src/providers/qqmusic/index.js
 var host2 = providerHost("qqmusic");
 var sessions = createSessionStore({ storage: host2.storage, refresh: (s) => refreshWechatSession(s, qqFetch) });
-var API = "https://u.y.qq.com/cgi-bin/musicu.fcg";
+var appLoginAbort = null;
+var API2 = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 var headers = { "Content-Type": "application/json", "Referer": "https://y.qq.com/", "User-Agent": "Mozilla/5.0" };
 var pageSize = 20;
 var searchPages = /* @__PURE__ */ new Map();
@@ -15144,7 +15391,7 @@ async function rawRpc(module, method, param, session4, customComm, signal) {
     requestHeaders["User-Agent"] = headers["User-Agent"];
     if (!auth) requestHeaders.Cookie = "tmeLoginType=-1";
   }
-  const response = await qqFetch(API, { method: "POST", headers: requestHeaders, signal, body: JSON.stringify({ comm: comm2, req_0: { module, method, param } }) });
+  const response = await qqFetch(API2, { method: "POST", headers: requestHeaders, signal, body: JSON.stringify({ comm: comm2, req_0: { module, method, param } }) });
   if (!response.ok) throw new Error(`QQ Music HTTP ${response.status}`);
   const body = await response.json();
   if (!body || typeof body.code !== "number" || typeof body.req_0?.code !== "number") throw new Error("QQ Music returned a malformed response");
@@ -15283,6 +15530,10 @@ async function streamOnce(id, quality, session4, signal) {
   throw Object.assign(new Error("QQ \u97F3\u4E50\u6682\u672A\u63D0\u4F9B\u5B8C\u6574\u64AD\u653E\u94FE\u63A5\uFF0C\u8BF7\u68C0\u67E5\u5BF9\u5E94\u8D26\u53F7\u4E0E\u6B4C\u66F2\u6743\u9650"), { code: "unavailable", missingStream: true });
 }
 async function stream2({ id, quality = "standard" }) {
+  return streamCache.stream(String(id), quality);
+}
+var streamCache = createStreamCache({ version: sessions.version, load: resolveStream });
+async function resolveStream(id, quality) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 24e3);
   try {
@@ -15461,15 +15712,35 @@ async function qqFinishSignIn(value, expected = sessions.version()) {
   if (!session4) throw qqAuthError("QQ Music login returned an invalid credential");
   const profile = await qqAccountFor(session4);
   sessions.set(session4, expected);
+  streamCache.clear();
   searchPages.clear();
   return profile;
 }
 async function signIn2() {
   const expected = sessions.version();
-  const method = (typeof host2.setting === "function" ? host2.setting("loginMethod") : "").trim().toLowerCase();
-  if (method && method !== "qq" && method !== "wechat" && method !== "\u5FAE\u4FE1") throw qqAuthError("Login method must be QQ or WeChat");
+  const method = parseQQLoginMethod(typeof host2.setting === "function" ? host2.setting("loginMethod") : "");
+  appLoginAbort?.abort();
   const deps = { fetch: qqFetch, decodeQR, prompt: (value) => host2.signInPrompt(value), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) };
-  if (method === "wechat" || method === "\u5FAE\u4FE1") {
+  if (method === "qqmusic") {
+    const controller = new AbortController();
+    appLoginAbort = controller;
+    try {
+      const value = await qqMusicAppSignIn({
+        ...deps,
+        platform: host2.platform,
+        arch: host2.arch,
+        spawn: (command, args) => host2.spawn(command, args),
+        prepareDevice: prepareQQDevice,
+        deviceComm: wechatDeviceComm,
+        signal: controller.signal,
+        isCurrent: () => sessions.version() === expected
+      });
+      return await qqFinishSignIn(value, expected);
+    } finally {
+      if (appLoginAbort === controller) appLoginAbort = null;
+    }
+  }
+  if (method === "wechat") {
     deps.randomBytes = await wechatRandom(qqFetch, (text) => host2.crypto.md5(text));
     deps.fetch = wechatCookieFetch(qqFetch);
     return qqFinishSignIn(await wechatSignIn(deps), expected);
@@ -15486,7 +15757,10 @@ async function account2() {
   }
 }
 function signOut2() {
+  appLoginAbort?.abort();
+  appLoginAbort = null;
   sessions.clear();
+  streamCache.clear();
   searchPages.clear();
 }
 function createBrowse({ rpc: rpc2, cgi: cgi2, trackOf: trackOf2, t = (value) => value }) {
@@ -16665,6 +16939,34 @@ function decodeQRC(input) {
   return new TextDecoder("utf-8", { fatal: true }).decode(inflater.result);
 }
 
+// src/source-views.js
+var PROVIDERS = ["netease", "qqmusic"];
+var NAMES = { netease: "\u7F51\u6613\u4E91", qqmusic: "QQ \u97F3\u4E50" };
+var invalid = () => Object.assign(new Error("\u641C\u7D22\u97F3\u6E90\u8BF7\u586B\u5199 both\u3001netease \u6216 qqmusic"), { code: "setup" });
+function searchSource(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw || ["both", "\u5168\u90E8"].includes(raw)) return "both";
+  if (["netease", "\u7F51\u6613\u4E91"].includes(raw)) return "netease";
+  if (["qqmusic", "qq", "qq\u97F3\u4E50"].includes(raw)) return "qqmusic";
+  throw invalid();
+}
+function searchScope(value, setting) {
+  let query3 = String(value || "").trim();
+  let source = searchSource(setting);
+  const prefix = /^(qqmusic|qq|netease|网易云|qq音乐)[:：]\s*/i.exec(query3);
+  if (prefix) {
+    source = searchSource(prefix[1]);
+    query3 = query3.slice(prefix[0].length).trim();
+  }
+  return { query: query3, source, providers: source === "both" ? PROVIDERS : [source], prefix: prefix?.[0] || "" };
+}
+function sourceSections(items, context, present = (value) => value) {
+  return PROVIDERS.map((provider) => {
+    const tracks = items.filter((item) => String(item.id).startsWith(provider + ":")).map(present);
+    return { title: `${context} \xB7 ${NAMES[provider]}`, tracks, subtitle: `${tracks.length} \u9996`, empty: "\u6682\u65E0\u6B64\u97F3\u6E90\u6B4C\u66F2" };
+  });
+}
+
 // src/fusion.js
 var SOURCES = ["netease", "qqmusic"];
 var LABEL = { netease: "\u7F51\u6613\u4E91", qqmusic: "QQ" };
@@ -16695,6 +16997,7 @@ function relevance(item, query3) {
 }
 function createFusion(providers, host3) {
   const searches = /* @__PURE__ */ new Map();
+  let lastTrackSearch = null;
   const statuses = /* @__PURE__ */ new Map();
   let signingIn = false;
   let authEpoch = 0;
@@ -16876,6 +17179,7 @@ function createFusion(providers, host3) {
         write("profiles", profiles);
       }
       searches.clear();
+      lastTrackSearch = null;
       return combinedAccount(read("profiles", {}));
     } finally {
       signingIn = false;
@@ -16891,23 +17195,27 @@ function createFusion(providers, host3) {
       write("profiles", profiles);
     }
     searches.clear();
+    lastTrackSearch = null;
   }
   async function search4({ query: query3, kind = "tracks", offset = 0 }) {
-    query3 = String(query3 || "").trim();
+    const scope = searchScope(query3, setting("searchSource"));
+    query3 = scope.query;
     if (!query3) return { [kind]: [], more: false };
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("\u65E0\u6548\u641C\u7D22\u5206\u9875");
     if (!["tracks", "albums", "artists", "playlists", "shows"].includes(kind)) throw error("unsupported", "\u4E0D\u652F\u6301\u8BE5\u641C\u7D22\u7C7B\u578B");
-    const key = `${kind}\0${query3}`;
+    const selected = scope.providers;
+    const key = `${kind}\0${scope.source}\0${query3}`;
     let state = searches.get(key);
     if (!state || offset === 0 && (!state.pages.has(0) || Date.now() - state.created > 6e4)) {
-      state = { created: Date.now(), cursors: Object.fromEntries(SOURCES.map((p) => [p, { offset: 0, more: true }])), pages: /* @__PURE__ */ new Map() };
+      state = { query: query3, created: Date.now(), cursors: Object.fromEntries(selected.map((p) => [p, { offset: 0, more: true }])), pages: /* @__PURE__ */ new Map(), trackPages: /* @__PURE__ */ new Map() };
       searches.set(key, state);
       if (searches.size > 12) searches.delete(searches.keys().next().value);
     }
+    if (kind === "tracks") lastTrackSearch = state;
     if (state.pages.has(offset)) return clone(await state.pages.get(offset));
     if (offset && offset !== state.nextOffset) throw new Error("\u641C\u7D22\u5DF2\u5237\u65B0\uFF0C\u8BF7\u4ECE\u7B2C\u4E00\u9875\u91CD\u8BD5");
     const pending = (async () => {
-      const active = SOURCES.filter((p) => state.cursors[p].more && !(kind === "shows" && p === "qqmusic"));
+      const active = selected.filter((p) => state.cursors[p].more && !(kind === "shows" && p === "qqmusic"));
       const pages = await Promise.all(active.map(async (provider) => {
         try {
           const page = await call(provider, "search", { query: query3, kind, offset: state.cursors[provider].offset });
@@ -16929,9 +17237,12 @@ function createFusion(providers, host3) {
       })));
       items.sort((a, b) => relevance(a.raw, query3) - relevance(b.raw, query3) || a.index - b.index || SOURCES.indexOf(a.provider) - SOURCES.indexOf(b.provider));
       const result = items.map((v) => v.item);
-      if (kind === "tracks") remember(result);
+      if (kind === "tracks") {
+        remember(result);
+        state.trackPages.set(offset, result);
+      }
       state.nextOffset = offset + result.length;
-      return { [kind]: kind === "tracks" ? result.map(presentTrack) : result, more: result.length > 0 && SOURCES.some((p) => state.cursors[p].more && !(kind === "shows" && p === "qqmusic")) };
+      return { [kind]: kind === "tracks" ? result.map(presentTrack) : result, more: result.length > 0 && selected.some((p) => state.cursors[p].more && !(kind === "shows" && p === "qqmusic")) };
     })();
     state.pages.set(offset, pending);
     try {
@@ -17049,10 +17360,14 @@ function createFusion(providers, host3) {
   }
   function setSetting2({ key, value }) {
     if (key === "loginTarget") parseTarget(value);
-    if (key === "qqLoginMethod" && !["", "qq", "wechat", "\u5FAE\u4FE1"].includes(String(value).trim().toLowerCase())) throw error("setup", "QQ \u626B\u7801\u65B9\u5F0F\u8BF7\u586B\u5199 qq \u6216 wechat");
+    if (key === "qqLoginMethod") parseQQLoginMethod(value);
+    if (key === "searchSource") searchSource(value);
     if (key === "importPlaylists" && String(value).trim()) importLibrary(String(value));
     if (key === "showSourceInTitle" && !["", "true", "false"].includes(String(value).trim().toLowerCase())) throw error("setup", "\u6B4C\u540D\u5E73\u53F0\u6807\u7B7E\u8BF7\u586B\u5199 true \u6216 false\uFF1B\u7559\u7A7A\u9ED8\u8BA4\u5173\u95ED");
-    if (["loginTarget", "qqLoginMethod", "showSourceInTitle"].includes(key)) searches.clear();
+    if (["loginTarget", "qqLoginMethod", "showSourceInTitle", "searchSource"].includes(key)) {
+      searches.clear();
+      lastTrackSearch = null;
+    }
   }
   async function home4() {
     const profiles = read("profiles", {});
@@ -17065,6 +17380,7 @@ function createFusion(providers, host3) {
         { title: "\u97F3\u4E50\u53D1\u73B0", links: [
           { title: "\u7F51\u6613\u4E91\u97F3\u4E50", subtitle: "\u63A8\u8350\u3001\u6392\u884C\u699C\u3001\u6BCF\u65E5\u63A8\u8350", page: "netease:home" },
           { title: "QQ \u97F3\u4E50", subtitle: "\u63A8\u8350\u6B4C\u5355\u3001\u6392\u884C\u699C", page: "qqmusic:home" },
+          { title: "\u6309\u97F3\u6E90\u67E5\u770B", subtitle: "\u6700\u8FD1\u641C\u7D22\u3001\u64AD\u653E\u8BB0\u5F55\u548C\u6DF7\u5408\u6B4C\u5355\u6309\u7F51\u6613\u4E91 / QQ \u5206\u7EC4", page: "sources" },
           { title: "\u8D26\u53F7\u4E0E\u4F7F\u7528\u8BF4\u660E", subtitle: "\u4E24\u4E2A\u8D26\u53F7\u5206\u5F00\u767B\u5F55\uFF0C\u5E73\u53F0\u6B4C\u66F2\u72EC\u7ACB\u4FDD\u7559", page: "accounts" }
         ] },
         { title: "\u672C\u5730\u6DF7\u5408\u6B4C\u5355", playlists: localLists().map(presentPlaylist), empty: "\u4F7F\u7528\u4FA7\u680F\u7684 + \u65B0\u5EFA\u6B4C\u5355\uFF0C\u518D\u4ECE\u641C\u7D22\u7ED3\u679C\u6DFB\u52A0\u4E24\u8FB9\u7684\u6B4C\u66F2\u3002" }
@@ -17072,13 +17388,25 @@ function createFusion(providers, host3) {
     };
   }
   async function browse4({ page }) {
+    if (page.startsWith("sources:playlist:")) {
+      const list = await playlist4({ id: page.slice("sources:playlist:".length) });
+      return { title: `${list.name} \xB7 \u6309\u97F3\u6E90\u67E5\u770B`, description: "\u6309\u5E73\u53F0\u5206\u7EC4\u64AD\u653E\u548C\u6DFB\u52A0\u6B4C\u66F2\uFF1B\u5728\u539F\u6B4C\u5355\u4E2D\u7F16\u8F91\u987A\u5E8F\u3002", sections: sourceSections(list.tracks || [], "\u6B4C\u66F2") };
+    }
+    if (page === "sources") {
+      const loaded = lastTrackSearch ? [...new Map([...lastTrackSearch.trackPages.values()].flat().map((t) => [t.id, t])).values()] : [];
+      return { title: "\u6309\u97F3\u6E90\u67E5\u770B", description: "\u5E73\u53F0\u6807\u9898\u4E0B\u7684\u6B4C\u66F2\u6765\u81EA\u5BF9\u5E94\u97F3\u6E90\uFF0C\u4FDD\u7559\u539F\u59CB\u6B4C\u540D\u3002\u641C\u7D22\u53EF\u52A0 qq: \u6216 netease: \u524D\u7F00\u4E34\u65F6\u7B5B\u9009\uFF0C\u4E5F\u53EF\u5728\u63D2\u4EF6\u8BBE\u7F6E\u7684\u201C\u641C\u7D22\u97F3\u6E90\u201D\u4E2D\u9009\u62E9\u9ED8\u8BA4\u5E73\u53F0\u3002\u5168\u5C40\u641C\u7D22\u548C\u64AD\u653E\u961F\u5217\u6682\u4E0D\u652F\u6301\u63D2\u4EF6\u81EA\u5B9A\u4E49\u9010\u66F2\u97F3\u6E90\u5FBD\u6807\u3002", sections: [
+        ...lastTrackSearch ? sourceSections(loaded, `\u6700\u8FD1\u641C\u7D22\uFF1A${lastTrackSearch.query}\uFF08\u5DF2\u52A0\u8F7D\u7ED3\u679C\uFF09`, presentTrack) : [],
+        ...sourceSections(read("recent", []), "\u6700\u8FD1\u64AD\u653E", presentTrack),
+        { title: "\u6DF7\u5408\u6B4C\u5355 \xB7 \u6309\u97F3\u6E90\u5206\u7EC4", links: localLists().map((list) => ({ title: list.name, subtitle: `${list.trackCount} \u9996 \xB7 \u7F51\u6613\u4E91 / QQ \u97F3\u4E50`, page: `sources:playlist:${list.id}` })), empty: "\u4F7F\u7528\u4FA7\u680F + \u65B0\u5EFA\u672C\u5730\u6DF7\u5408\u6B4C\u5355" }
+      ] };
+    }
     if (page === "accounts") {
       const value = await home4();
       return { title: "\u8D26\u53F7\u4E0E\u4F7F\u7528\u8BF4\u660E", description: `${value.description}
 
-\u5728\u8BBE\u7F6E \u2192 \u63D2\u4EF6 \u2192 NetEaseXQQMusic \u7684\u201C\u767B\u5F55\u76EE\u6807\u201D\u4E2D\u586B\u5199 both\uFF08\u4E24\u4E2A\u5E73\u53F0\uFF09\u3001netease\uFF08\u7F51\u6613\u4E91\uFF09\u6216 qqmusic\uFF08QQ\uFF09\uFF0C\u4FDD\u5B58\u540E\u70B9 Sign In\u3002\u9ED8\u8BA4\u4F9D\u6B21\u626B\u63CF\u4E24\u8FB9\u4E8C\u7EF4\u7801\uFF1B\u4E5F\u53EF\u5355\u72EC\u767B\u5F55\u6216\u9000\u51FA\u4E00\u4E2A\u5E73\u53F0\u3002QQ \u626B\u7801\u65B9\u5F0F\u586B\u5199 qq\uFF08\u624B\u673A QQ\uFF09\u6216 wechat\uFF08\u5FAE\u4FE1\uFF09\u3002
+\u5728\u8BBE\u7F6E \u2192 \u63D2\u4EF6 \u2192 NetEaseXQQMusic \u7684\u201C\u767B\u5F55\u76EE\u6807\u201D\u4E2D\u586B\u5199 both\uFF08\u4E24\u4E2A\u5E73\u53F0\uFF09\u3001netease\uFF08\u7F51\u6613\u4E91\uFF09\u6216 qqmusic\uFF08QQ\uFF09\uFF0C\u4FDD\u5B58\u540E\u70B9 Sign In\u3002\u9ED8\u8BA4\u4F9D\u6B21\u626B\u63CF\u4E24\u8FB9\u4E8C\u7EF4\u7801\uFF1B\u4E5F\u53EF\u5355\u72EC\u767B\u5F55\u6216\u9000\u51FA\u4E00\u4E2A\u5E73\u53F0\u3002QQ \u626B\u7801\u65B9\u5F0F\u586B\u5199 qq\uFF08\u624B\u673A QQ\uFF09\u3001qqmusic\uFF08QQ \u97F3\u4E50 App\uFF09\u6216 wechat\uFF08\u5FAE\u4FE1\uFF09\u3002App \u626B\u7801\u9996\u6B21\u9700\u5728 MyGo \u4E2D\u5141\u8BB8\u6B64\u63D2\u4EF6\u8FD0\u884C\u7A0B\u5E8F\uFF1B\u53E6\u5916\u4E24\u79CD\u65B9\u5F0F\u65E0\u9700\u8FD0\u884C\u7A0B\u5E8F\u6743\u9650\u3002
 
-\u9ED8\u8BA4\u4FDD\u7559\u539F\u59CB\u6B4C\u540D\uFF0C\u4FBF\u4E8E\u63D2\u4EF6\u5C9B\u7B49\u5DE5\u5177\u5339\u914D\u6B4C\u8BCD\u3002\u5982\u9700\u5728\u6B4C\u540D\u4E2D\u663E\u793A\u3014\u7F51\u6613\u4E91\u3015\u6216\u3014QQ\u3015\uFF0C\u53EF\u628A\u201C\u6B4C\u540D\u663E\u793A\u5E73\u53F0\u6807\u7B7E\u201D\u586B\u5199\u4E3A true\uFF1B\u4F7F\u7528\u5916\u90E8\u6B4C\u8BCD\u5DE5\u5177\u65F6\u8BF7\u5173\u95ED\u3002\u66F4\u65B0\u6216\u5207\u6362\u8BBE\u7F6E\u540E\uFF0C\u4ECE\u641C\u7D22\u6216\u6B4C\u5355\u91CD\u65B0\u52A0\u5165\u6B4C\u66F2\uFF0C\u624D\u80FD\u66FF\u6362\u65E7\u64AD\u653E\u961F\u5217\u91CC\u7684\u6807\u9898\u3002\u6B4C\u66F2\u59CB\u7EC8\u6309\u539F\u5E73\u53F0\u64AD\u653E\uFF1B\u5E73\u53F0\u6B4C\u5355\u548C\u53D1\u73B0\u9875\u4FDD\u7559\u6765\u6E90\u540D\u79F0\u3002\u65B0\u5EFA\u6B4C\u5355\u4FDD\u5B58\u5728\u672C\u673A\uFF0C\u652F\u6301\u6DF7\u5408\u6765\u6E90\uFF1B\u5E73\u53F0\u6B4C\u5355\u4E3A\u53EA\u8BFB\u3002\u63D2\u4EF6\u66F4\u65B0\u4E0D\u4F1A\u5220\u9664\u4F1A\u8BDD\u548C\u672C\u5730\u6B4C\u5355\u3002
+\u9ED8\u8BA4\u4FDD\u7559\u539F\u59CB\u6B4C\u540D\uFF0C\u4FBF\u4E8E\u63D2\u4EF6\u5C9B\u7B49\u5DE5\u5177\u5339\u914D\u6B4C\u8BCD\u3002\u4FA7\u680F\u201C\u6309\u97F3\u6E90\u67E5\u770B\u201D\u6309\u7F51\u6613\u4E91 / QQ \u97F3\u4E50\u5206\u7EC4\u5C55\u793A\u5DF2\u52A0\u8F7D\u7684\u6700\u8FD1\u641C\u7D22\u3001\u6700\u8FD1\u64AD\u653E\u548C\u6DF7\u5408\u6B4C\u5355\uFF1B\u641C\u7D22\u8BCD\u524D\u52A0 qq: \u6216 netease: \u53EF\u4E34\u65F6\u6307\u5B9A\u97F3\u6E90\uFF0C\u4E5F\u53EF\u8BBE\u7F6E\u201C\u641C\u7D22\u97F3\u6E90\u201D\u4E3A both\u3001netease \u6216 qqmusic\u3002\u5BBF\u4E3B\u76EE\u524D\u6CA1\u6709\u63D2\u4EF6\u81EA\u5B9A\u4E49\u9010\u66F2\u97F3\u6E90\u5FBD\u6807\u63A5\u53E3\uFF0C\u5168\u5C40\u6DF7\u5408\u641C\u7D22\u548C\u961F\u5217\u65E0\u6CD5\u5355\u72EC\u52A0\u5FBD\u6807\u3002\u5982\u9700\u5728\u6B4C\u540D\u4E2D\u663E\u793A\u3014\u7F51\u6613\u4E91\u3015\u6216\u3014QQ\u3015\uFF0C\u53EF\u628A\u201C\u6B4C\u540D\u663E\u793A\u5E73\u53F0\u6807\u7B7E\u201D\u586B\u5199\u4E3A true\uFF1B\u4F7F\u7528\u5916\u90E8\u6B4C\u8BCD\u5DE5\u5177\u65F6\u8BF7\u5173\u95ED\u3002\u66F4\u65B0\u6216\u5207\u6362\u8BBE\u7F6E\u540E\uFF0C\u4ECE\u641C\u7D22\u6216\u6B4C\u5355\u91CD\u65B0\u52A0\u5165\u6B4C\u66F2\uFF0C\u624D\u80FD\u66FF\u6362\u65E7\u64AD\u653E\u961F\u5217\u91CC\u7684\u6807\u9898\u3002\u6B4C\u66F2\u59CB\u7EC8\u6309\u539F\u5E73\u53F0\u64AD\u653E\uFF1B\u5E73\u53F0\u6B4C\u5355\u548C\u53D1\u73B0\u9875\u4FDD\u7559\u6765\u6E90\u540D\u79F0\u3002\u65B0\u5EFA\u6B4C\u5355\u4FDD\u5B58\u5728\u672C\u673A\uFF0C\u652F\u6301\u6DF7\u5408\u6765\u6E90\uFF1B\u5E73\u53F0\u6B4C\u5355\u4E3A\u53EA\u8BFB\u3002\u63D2\u4EF6\u66F4\u65B0\u4E0D\u4F1A\u5220\u9664\u4F1A\u8BDD\u548C\u672C\u5730\u6B4C\u5355\u3002
 
 \u64AD\u653E\u5B8C\u6574\u94FE\u63A5\u53D7\u8D26\u53F7\u3001\u7248\u6743\u548C\u5730\u533A\u6743\u9650\u9650\u5236\uFF1B\u6682\u505C\u3001\u7F13\u51B2\u53CA\u5931\u8D25\u540E\u662F\u5426\u8DF3\u6B4C\u7531 MyGo Music \u672C\u4F53\u5904\u7406\u3002`, sections: [] };
     }
@@ -17157,14 +17485,16 @@ function createFusion(providers, host3) {
     recent: () => read("recent", []).map(presentTrack),
     played: played2,
     suggest: async ({ query: query3 }) => {
-      const answers = await Promise.all(SOURCES.map(async (p) => {
+      const scope = searchScope(query3, setting("searchSource"));
+      if (!scope.query) return [];
+      const answers = await Promise.all(scope.providers.map(async (p) => {
         try {
-          return await call(p, "suggest", { query: query3 });
+          return await call(p, "suggest", { query: scope.query });
         } catch {
           return [];
         }
       }));
-      return [...new Set(answers.flat())].slice(0, 12);
+      return [...new Set(answers.flat())].slice(0, 12).map((value) => scope.prefix + value);
     },
     stream: routed("stream"),
     lyrics: routed("lyrics"),

@@ -1,16 +1,21 @@
 {
   "id": "music-fusion",
   "name": "NetEaseXQQMusic",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "minAppVersion": "0.1.20",
   "main": "dist/index.js",
   "playback": "stream",
   "permissions": {
     "network": [
       "music.163.com", "interfacepc.music.163.com",
-      "u.y.qq.com", "c.y.qq.com", "c6.y.qq.com", "y.qq.com",
+      "u.y.qq.com", "c.y.qq.com", "c6.y.qq.com", "y.qq.com", "mu.y.qq.com",
       "xui.ptlogin2.qq.com", "ssl.ptlogin2.graph.qq.com", "graph.qq.com",
       "api.tencentmusic.com", "open.weixin.qq.com", "lp.open.weixin.qq.com"
+    ],
+    "process": [
+      "bin/qqmusic-login-darwin-arm64", "bin/qqmusic-login-darwin-amd64",
+      "bin/qqmusic-login-linux-arm64", "bin/qqmusic-login-linux-amd64",
+      "bin/qqmusic-login-windows-arm64.exe", "bin/qqmusic-login-windows-amd64.exe"
     ]
   },
   "settings": [
@@ -22,7 +27,12 @@
     {
       "key": "qqLoginMethod",
       "label": "QQ 音乐扫码方式",
-      "help": "填写 qq（手机 QQ，默认）或 wechat（微信）。若会员绑定微信，请填 wechat，并用对应账号扫码。"
+      "help": "填写 qq（手机 QQ，默认）、qqmusic（QQ 音乐 App）或 wechat（微信）。App 扫码使用 ZIP 内置程序，首次需在 MyGo 中允许此插件运行程序；其他方式无需此权限。会员绑定微信时请用对应账号。"
+    },
+    {
+      "key": "searchSource",
+      "label": "搜索音源",
+      "help": "填写 both（双平台，默认）、netease（仅网易云）或 qqmusic（仅 QQ 音乐）。也可在搜索词前加 qq: 或 netease: 临时指定音源。侧栏“按音源查看”可按平台分组查看最近搜索、最近播放和混合歌单，不修改歌名。"
     },
     {
       "key": "showSourceInTitle",
@@ -37,6 +47,7 @@
   ],
   "navigation": [
     { "builtin": "home", "title": "NetEaseXQQMusic" },
+    { "title": "按音源查看", "page": "sources", "icon": "note" },
     { "title": "网易云发现", "page": "netease:home", "icon": "note" },
     { "title": "QQ 音乐发现", "page": "qqmusic:home", "icon": "note" },
     { "builtin": "liked", "title": "两边喜欢的音乐" },

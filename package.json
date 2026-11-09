@@ -1,6 +1,6 @@
 {
   "name": "neteasexqqmusic",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -16,7 +16,10 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test --test-timeout=30000 tests/*.test.mjs",
-    "test:core": "node --test tests/fusion.test.mjs tests/session.test.mjs tests/http.test.mjs",
+    "test:core": "node --test tests/fusion.test.mjs tests/session.test.mjs tests/http.test.mjs tests/app-login.test.mjs tests/stream-cache.test.mjs",
+    "test:native": "go -C native/qqmusic-login test -race ./...",
+    "build:native": "node scripts/build-native.mjs",
+    "smoke:native": "node scripts/smoke-helper.mjs",
     "test:runtime": "node scripts/test-runtime.mjs",
     "pack": "node scripts/pack.mjs",
     "import-playlists": "node scripts/import-playlists.mjs"

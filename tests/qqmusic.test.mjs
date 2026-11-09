@@ -70,6 +70,61 @@ test('expired WeChat playback refreshes once before detail and vkey requests', a
   assert.equal(storage.get(authKey).musickey, 'synthetic-renewed');
 });
 
+// Parallel playback/prefetch requests share detail and vkey work. Success is
+// briefly reused, but failures, other tracks/qualities and account changes
+// must never become another request's playback authorization.
+test('stream work coalesces and short-lived success is scoped to track, quality and account', async () => {
+  let calls = 0;
+  const details = [];
+  const session = initial();
+  const { api } = await setup(async (url, init) => {
+    calls++;
+    const body = JSON.parse(init.body);
+    if (body.req_0.method === 'get_song_detail_yqq') {
+      await new Promise(resolve => { details.push(resolve); });
+      return json(envelope({ track_info: song }));
+    }
+    return json(envelope({ midurlinfo: [{ songmid: mid, purl: `/synthetic-${calls}.mp3` }], sip: ['https://dl.stream.qqmusic.qq.com/'] }));
+  }, session);
+  const resolveDetails = async count => {
+    for (let tries = 0; tries < 50 && details.length < count; tries++) await new Promise(setImmediate);
+    assert.equal(details.length, count);
+    for (const finish of details.splice(0)) finish();
+  };
+  const first = api.stream({ id: mid, quality: 'high' });
+  const second = api.stream({ id: mid, quality: 'high' });
+  await resolveDetails(1);
+  const [original] = await Promise.all([first, second]);
+  assert.equal(calls, 2, 'two in-flight requests share two API calls');
+  assert.equal((await api.stream({ id: mid, quality: 'high' })).url, original.url);
+  assert.equal(calls, 2, 'a short-lived success needs no new detail/vkey calls');
+  const otherQuality = api.stream({ id: mid, quality: 'lossless' });
+  const otherTrack = api.stream({ id: '97759', quality: 'high' });
+  await resolveDetails(2);
+  await Promise.all([otherQuality, otherTrack]);
+  assert.equal(calls, 6, 'different qualities and tracks stay separate');
+  api.signOut();
+  const signedOut = api.stream({ id: mid, quality: 'high' });
+  await resolveDetails(1);
+  const anonymous = await signedOut;
+  assert.notEqual(anonymous.url, original.url);
+  assert.equal(calls, 8, 'sign-out invalidates the old signed URL');
+});
+
+test('failed stream resolution is not cached as a success', async () => {
+  let calls = 0;
+  const { api } = await setup((url, init) => {
+    calls++;
+    if (calls === 1) throw new Error('synthetic temporary failure');
+    return json(envelope(JSON.parse(init.body).req_0.method === 'get_song_detail_yqq'
+      ? { track_info: song }
+      : { midurlinfo: [{ songmid: mid, purl: '/recovered.mp3' }], sip: ['https://dl.stream.qqmusic.qq.com/'] }));
+  });
+  await assert.rejects(api.stream({ id: mid }), /temporary failure/);
+  assert.equal((await api.stream({ id: mid })).url, 'https://dl.stream.qqmusic.qq.com/recovered.mp3');
+  assert.equal(calls, 3);
+});
+
 // Desktop filtering falls back once, then the raw backend page stays pinned across merged offsets.
 test('search fallback pins legacy page cursor', async () => {
   let desktop = 0;

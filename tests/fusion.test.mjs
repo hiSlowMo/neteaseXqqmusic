@@ -100,6 +100,8 @@ test('optional source labels are reversible and retain genuine provider titles',
   assert.equal((await restarted.search({ query })).tracks[0].name, 'A real title 〔QQ〕');
   assert.equal((await restarted.playlist({ id: list.id })).tracks[0].name, 'A real title 〔QQ〕');
   assert.equal(restarted.recent()[0].name, 'A real title 〔QQ〕');
+  const grouped = await restarted.browse({ page: `sources:playlist:${list.id}` });
+  assert.equal(grouped.sections[1].tracks[0].name, 'A real title 〔QQ〕');
   assert.throws(() => api.setSetting({ key: 'showSourceInTitle', value: 'maybe' }), { code: 'setup' });
 });
 
@@ -275,4 +277,63 @@ test('legacy import preserves mixed identity and repeat-save is idempotent', asy
   assert.equal(lists[0].tracks[1].unavailable, false);
   assert.throws(() => api.setSetting({ key: 'importPlaylists', value: JSON.stringify({ ...data, playlists: [{ name: 'bad', tracks: [{ id: 'evil:1', name: 'x' }] }] }) }));
   assert.equal((await api.playlists()).length, 1);
+});
+
+// Filtering must use provider cursors, never leak the merged offset to one service.
+test('source filters and query prefixes keep isolated pagination and caches', async () => {
+  const calls = [];
+  const make = p => ({ search: async args => {
+    calls.push([p, args.query, args.offset]);
+    return { tracks: [song(args.offset + 1, 'Same title')], more: args.offset === 0 };
+  } });
+  const { api, settings } = setup({ netease: make('netease'), qqmusic: make('qqmusic') });
+  const first = await api.search({ query: 'qq: Same title' });
+  assert.deepEqual(first.tracks.map(t => t.id), ['qqmusic:1']);
+  assert.equal(first.more, true);
+  const second = await api.search({ query: 'qq: Same title', offset: 1 });
+  assert.equal(second.more, false);
+  assert.deepEqual(calls, [['qqmusic', 'Same title', 0], ['qqmusic', 'Same title', 1]]);
+  const merged = await api.search({ query: 'Same title' });
+  assert.deepEqual(merged.tracks.map(t => t.id), ['netease:1', 'qqmusic:1']);
+  settings.set('searchSource', 'qqmusic');
+  api.setSetting({ key: 'searchSource', value: 'qqmusic' });
+  assert.deepEqual((await api.search({ query: 'Same title' })).tracks.map(t => t.id), ['qqmusic:1']);
+  assert.deepEqual((await api.search({ query: 'netease: Same title' })).tracks.map(t => t.id), ['netease:1']);
+  const before = calls.length;
+  assert.deepEqual((await api.search({ query: 'qq:' })).tracks, []);
+  assert.equal(calls.length, before);
+  assert.throws(() => api.setSetting({ key: 'searchSource', value: 'typo' }), { code: 'setup' });
+});
+
+// Grouped search, history and playlists must distinguish identical titles without changing media metadata.
+test('source view groups clean tracks by identity and persists playlist grouping after restart', async () => {
+  const make = () => ({ search: async () => ({ tracks: [song('9', 'May I Ask')], more: false }) });
+  const { api, providers, host } = setup({ netease: make(), qqmusic: make() });
+  const result = await api.search({ query: 'May I Ask' });
+  const list = api.createPlaylist({ name: 'Mixed' });
+  await api.addToPlaylist({ id: list.id, trackIds: result.tracks.map(t => t.id) });
+  for (const track of result.tracks) await api.played({ id: track.id });
+  const page = await api.browse({ page: 'sources' });
+  assert.deepEqual(page.sections.slice(0, 4).map(s => s.tracks.map(t => t.id)), [['netease:9'], ['qqmusic:9'], ['netease:9'], ['qqmusic:9']]);
+  for (const section of page.sections.slice(0, 4)) for (const track of section.tracks) {
+    assert.equal(track.name, 'May I Ask'); assert.equal(track.artists[0].name, '周杰伦'); assert.equal(track.album.name, 'Jay');
+    assert.equal('fusionOriginalName' in track, false);
+  }
+  const link = page.sections.at(-1).links[0];
+  const restarted = createFusion(providers, host);
+  const grouped = await restarted.browse({ page: link.page });
+  assert.deepEqual(grouped.sections.map(s => s.tracks.map(t => t.id)), [['netease:9'], ['qqmusic:9']]);
+  assert.deepEqual((await restarted.playlist({ id: list.id })).tracks.map(t => t.id), result.tracks.map(t => t.id));
+});
+
+// Choosing a suggestion must preserve the source prefix instead of switching back to a merged search.
+test('suggestions retain temporary source scope', async () => {
+  const calls = [];
+  const make = p => ({ suggest: async ({ query }) => { calls.push([p, query]); return ['Song']; } });
+  const { api, settings } = setup({ netease: make('netease'), qqmusic: make('qqmusic') });
+  assert.deepEqual(await api.suggest({ query: 'qq: So' }), ['qq: Song']);
+  assert.deepEqual(calls, [['qqmusic', 'So']]);
+  settings.set('searchSource', 'netease');
+  assert.deepEqual(await api.suggest({ query: 'So' }), ['Song']);
+  assert.deepEqual(calls.at(-1), ['netease', 'So']);
 });

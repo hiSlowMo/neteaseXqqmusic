@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { parseQQLoginMethod } from './providers/qqmusic/login-method.js';
+import { searchSource, searchScope, sourceSections } from './source-views.js';
 const SOURCES = ['netease', 'qqmusic'];
 const LABEL = { netease: '网易云', qqmusic: 'QQ' };
 const clone = value => value == null ? value : JSON.parse(JSON.stringify(value));
@@ -30,6 +32,7 @@ export function relevance(item, query) {
 
 export function createFusion(providers, host) {
   const searches = new Map();
+  let lastTrackSearch = null;
   const statuses = new Map();
   let signingIn = false;
   let authEpoch = 0;
@@ -201,7 +204,7 @@ export function createFusion(providers, host) {
         profiles[provider] = profile;
         write('profiles', profiles);
       }
-      searches.clear();
+      searches.clear(); lastTrackSearch = null;
       return combinedAccount(read('profiles', {}));
     } finally { signingIn = false; }
   }
@@ -214,27 +217,30 @@ export function createFusion(providers, host) {
       delete profiles[provider];
       write('profiles', profiles);
     }
-    searches.clear();
+    searches.clear(); lastTrackSearch = null;
   }
 
   async function search({ query, kind = 'tracks', offset = 0 }) {
-    query = String(query || '').trim();
+    const scope = searchScope(query, setting('searchSource'));
+    query = scope.query;
     if (!query) return { [kind]: [], more: false };
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('无效搜索分页');
     if (!['tracks', 'albums', 'artists', 'playlists', 'shows'].includes(kind)) throw error('unsupported', '不支持该搜索类型');
-    const key = `${kind}\0${query}`;
+    const selected = scope.providers;
+    const key = `${kind}\0${scope.source}\0${query}`;
     let state = searches.get(key);
     if (!state || offset === 0 && (!state.pages.has(0) || Date.now() - state.created > 60000)) {
-      state = { created: Date.now(), cursors: Object.fromEntries(SOURCES.map(p => [p, { offset: 0, more: true }])), pages: new Map() };
+      state = { query, created: Date.now(), cursors: Object.fromEntries(selected.map(p => [p, { offset: 0, more: true }])), pages: new Map(), trackPages: new Map() };
       searches.set(key, state);
       if (searches.size > 12) searches.delete(searches.keys().next().value);
     }
+    if (kind === 'tracks') lastTrackSearch = state;
     if (state.pages.has(offset)) return clone(await state.pages.get(offset));
     // The host advances by merged result count, while each service advances by
     // its own raw page length. Never send the merged offset to either service.
     if (offset && offset !== state.nextOffset) throw new Error('搜索已刷新，请从第一页重试');
     const pending = (async () => {
-      const active = SOURCES.filter(p => state.cursors[p].more && !(kind === 'shows' && p === 'qqmusic'));
+      const active = selected.filter(p => state.cursors[p].more && !(kind === 'shows' && p === 'qqmusic'));
       const pages = await Promise.all(active.map(async provider => {
         try {
           const page = await call(provider, 'search', { query, kind, offset: state.cursors[provider].offset });
@@ -252,11 +258,11 @@ export function createFusion(providers, host) {
       })));
       items.sort((a, b) => relevance(a.raw, query) - relevance(b.raw, query) || a.index - b.index || SOURCES.indexOf(a.provider) - SOURCES.indexOf(b.provider));
       const result = items.map(v => v.item);
-      if (kind === 'tracks') remember(result);
+      if (kind === 'tracks') { remember(result); state.trackPages.set(offset, result); }
       state.nextOffset = offset + result.length;
       // An empty merged page cannot advance the app's cursor. Keep failures
       // visible through status rather than returning an endless 'more' loop.
-      return { [kind]: kind === 'tracks' ? result.map(presentTrack) : result, more: result.length > 0 && SOURCES.some(p => state.cursors[p].more && !(kind === 'shows' && p === 'qqmusic')) };
+      return { [kind]: kind === 'tracks' ? result.map(presentTrack) : result, more: result.length > 0 && selected.some(p => state.cursors[p].more && !(kind === 'shows' && p === 'qqmusic')) };
     })();
     state.pages.set(offset, pending);
     try { return clone(await pending); }
@@ -363,10 +369,11 @@ export function createFusion(providers, host) {
   }
   function setSetting({ key, value }) {
     if (key === 'loginTarget') parseTarget(value);
-    if (key === 'qqLoginMethod' && !['', 'qq', 'wechat', '微信'].includes(String(value).trim().toLowerCase())) throw error('setup', 'QQ 扫码方式请填写 qq 或 wechat');
+    if (key === 'qqLoginMethod') parseQQLoginMethod(value);
+    if (key === 'searchSource') searchSource(value);
     if (key === 'importPlaylists' && String(value).trim()) importLibrary(String(value));
     if (key === 'showSourceInTitle' && !['', 'true', 'false'].includes(String(value).trim().toLowerCase())) throw error('setup', '歌名平台标签请填写 true 或 false；留空默认关闭');
-    if (['loginTarget', 'qqLoginMethod', 'showSourceInTitle'].includes(key)) searches.clear();
+    if (['loginTarget', 'qqLoginMethod', 'showSourceInTitle', 'searchSource'].includes(key)) { searches.clear(); lastTrackSearch = null; }
   }
   async function home() {
     const profiles = read('profiles', {});
@@ -378,6 +385,7 @@ export function createFusion(providers, host) {
         { title: '音乐发现', links: [
           { title: '网易云音乐', subtitle: '推荐、排行榜、每日推荐', page: 'netease:home' },
           { title: 'QQ 音乐', subtitle: '推荐歌单、排行榜', page: 'qqmusic:home' },
+          { title: '按音源查看', subtitle: '最近搜索、播放记录和混合歌单按网易云 / QQ 分组', page: 'sources' },
           { title: '账号与使用说明', subtitle: '两个账号分开登录，平台歌曲独立保留', page: 'accounts' },
         ] },
         { title: '本地混合歌单', playlists: localLists().map(presentPlaylist), empty: '使用侧栏的 + 新建歌单，再从搜索结果添加两边的歌曲。' },
@@ -385,9 +393,21 @@ export function createFusion(providers, host) {
     };
   }
   async function browse({ page }) {
+    if (page.startsWith('sources:playlist:')) {
+      const list = await playlist({ id: page.slice('sources:playlist:'.length) });
+      return { title: `${list.name} · 按音源查看`, description: '按平台分组播放和添加歌曲；在原歌单中编辑顺序。', sections: sourceSections(list.tracks || [], '歌曲') };
+    }
+    if (page === 'sources') {
+      const loaded = lastTrackSearch ? [...new Map([...lastTrackSearch.trackPages.values()].flat().map(t => [t.id, t])).values()] : [];
+      return { title: '按音源查看', description: '平台标题下的歌曲来自对应音源，保留原始歌名。搜索可加 qq: 或 netease: 前缀临时筛选，也可在插件设置的“搜索音源”中选择默认平台。全局搜索和播放队列暂不支持插件自定义逐曲音源徽标。', sections: [
+        ...(lastTrackSearch ? sourceSections(loaded, `最近搜索：${lastTrackSearch.query}（已加载结果）`, presentTrack) : []),
+        ...sourceSections(read('recent', []), '最近播放', presentTrack),
+        { title: '混合歌单 · 按音源分组', links: localLists().map(list => ({ title: list.name, subtitle: `${list.trackCount} 首 · 网易云 / QQ 音乐`, page: `sources:playlist:${list.id}` })), empty: '使用侧栏 + 新建本地混合歌单' },
+      ] };
+    }
     if (page === 'accounts') {
       const value = await home();
-      return { title: '账号与使用说明', description: `${value.description}\n\n在设置 → 插件 → NetEaseXQQMusic 的“登录目标”中填写 both（两个平台）、netease（网易云）或 qqmusic（QQ），保存后点 Sign In。默认依次扫描两边二维码；也可单独登录或退出一个平台。QQ 扫码方式填写 qq（手机 QQ）或 wechat（微信）。\n\n默认保留原始歌名，便于插件岛等工具匹配歌词。如需在歌名中显示〔网易云〕或〔QQ〕，可把“歌名显示平台标签”填写为 true；使用外部歌词工具时请关闭。更新或切换设置后，从搜索或歌单重新加入歌曲，才能替换旧播放队列里的标题。歌曲始终按原平台播放；平台歌单和发现页保留来源名称。新建歌单保存在本机，支持混合来源；平台歌单为只读。插件更新不会删除会话和本地歌单。\n\n播放完整链接受账号、版权和地区权限限制；暂停、缓冲及失败后是否跳歌由 MyGo Music 本体处理。`, sections: [] };
+      return { title: '账号与使用说明', description: `${value.description}\n\n在设置 → 插件 → NetEaseXQQMusic 的“登录目标”中填写 both（两个平台）、netease（网易云）或 qqmusic（QQ），保存后点 Sign In。默认依次扫描两边二维码；也可单独登录或退出一个平台。QQ 扫码方式填写 qq（手机 QQ）、qqmusic（QQ 音乐 App）或 wechat（微信）。App 扫码首次需在 MyGo 中允许此插件运行程序；另外两种方式无需运行程序权限。\n\n默认保留原始歌名，便于插件岛等工具匹配歌词。侧栏“按音源查看”按网易云 / QQ 音乐分组展示已加载的最近搜索、最近播放和混合歌单；搜索词前加 qq: 或 netease: 可临时指定音源，也可设置“搜索音源”为 both、netease 或 qqmusic。宿主目前没有插件自定义逐曲音源徽标接口，全局混合搜索和队列无法单独加徽标。如需在歌名中显示〔网易云〕或〔QQ〕，可把“歌名显示平台标签”填写为 true；使用外部歌词工具时请关闭。更新或切换设置后，从搜索或歌单重新加入歌曲，才能替换旧播放队列里的标题。歌曲始终按原平台播放；平台歌单和发现页保留来源名称。新建歌单保存在本机，支持混合来源；平台歌单为只读。插件更新不会删除会话和本地歌单。\n\n播放完整链接受账号、版权和地区权限限制；暂停、缓冲及失败后是否跳歌由 MyGo Music 本体处理。`, sections: [] };
     }
     const { provider, id } = splitID(page);
     if (!SOURCES.includes(provider)) throw error('unsupported', '没有这个页面');
@@ -447,10 +467,12 @@ export function createFusion(providers, host) {
     createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist, movePlaylistTrack,
     recent: () => read('recent', []).map(presentTrack), played,
     suggest: async ({ query }) => {
-      const answers = await Promise.all(SOURCES.map(async p => {
-        try { return await call(p, 'suggest', { query }); } catch { return []; }
+      const scope = searchScope(query, setting('searchSource'));
+      if (!scope.query) return [];
+      const answers = await Promise.all(scope.providers.map(async p => {
+        try { return await call(p, 'suggest', { query: scope.query }); } catch { return []; }
       }));
-      return [...new Set(answers.flat())].slice(0, 12);
+      return [...new Set(answers.flat())].slice(0, 12).map(value => scope.prefix + value);
     },
     stream: routed('stream'), lyrics: routed('lyrics'), like: routed('like'), isLiked,
     liked: ({ offset = 0 }) => paged('liked', 'tracks', offset),

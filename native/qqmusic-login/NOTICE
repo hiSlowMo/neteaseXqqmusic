@@ -1,0 +1,34 @@
+MyGo QQ Music APP scanning transport helper
+Copyright (C) 2026 MyGo contributors
+SPDX-License-Identifier: GPL-3.0-or-later
+
+This helper contains an original Go implementation of a narrow MQTT 5
+transport protocol, adapted from the protocol behavior described by
+QQMusicApi, maintained by Luren and contributors:
+https://github.com/L-1124/QQMusicApi
+Pinned source revision: c046788dd1f11daacc74da487cbbf1bcd8ac6f33
+Referenced files:
+  qqmusic_api/utils/mqtt.py
+  qqmusic_api/modules/login.py
+The upstream project is distributed under the GNU General Public License,
+version 3 or (at your option) any later version. Its full, unmodified license
+is retained in licenses/qqmusic-api/LICENSE. This helper's Go sources and
+synthetic offline tests are distributed under the same GPL-3.0-or-later
+terms, without warranty, including without the implied warranties of
+merchantability or fitness for a particular purpose.
+
+Modifications: independent native Go MQTT framing, fixed-origin WebSocket
+transport, bounded JSON-lines interface, cancellation, and authored offline
+fixtures. No Python source is bundled or executed. This helper performs no
+QR creation, device operations, final session exchange, or HTTP login calls.
+
+Dependency: github.com/coder/websocket v1.8.15
+Source: https://github.com/coder/websocket/tree/v1.8.15
+Release commit: 9c8faadccd1b679e811a79ce506f8a10237251ad
+Copyright (c) 2025 Coder
+License: ISC, reproduced unmodified in licenses/coder-websocket/LICENSE.txt.
+
+The Go standard library is provided under Go's BSD-style license; its
+license is retained in licenses/GO-LICENSE for native binary redistribution.
+Redistributors must also provide the corresponding source and notices as
+required by the applicable licenses.

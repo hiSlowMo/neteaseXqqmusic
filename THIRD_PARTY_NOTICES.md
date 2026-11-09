@@ -11,6 +11,12 @@ NetEaseXQQMusic is licensed under GNU AGPL-3.0-only. See LICENSE. It is an indep
 
 Modifications dated 2026-11-07: added source namespaces and isolated storage, combined search/ranking/cursors, account targeting, persisted local mixed playlists and offline import, session generation/concurrency protection, request deadlines, authorized-read retry, numeric QQ ID hydration and stream-host validation. Removed list-level VIP flags as playback gates. Adapted NetEase tests to isolated storage and full-stream authorization. Full plugin source is included in the installation ZIP.
 
+## QQ Music App QR login (2026-11-09)
+
+The App-specific CreateQRCode → MQTT 5 / WSS → Login protocol was consulted at https://github.com/L-1124/QQMusicApi, commit `c046788dd1f11daacc74da487cbbf1bcd8ac6f33` (GPL-3.0-or-later), especially `qqmusic_api/modules/login.py`, `qqmusic_api/utils/mqtt.py` and the request/device preparation code. App login is implemented in `src/providers/qqmusic/auth-app.js` and `native/qqmusic-login/`; the complete corresponding source, dependency lock files and native dependency license notices are distributed with each installation ZIP. The JS and helper remain part of this AGPL-3.0-only plugin; the referenced SDK's original license is not replaced by the license of an MCP wrapper. This implementation does not bundle or run the Python SDK.
+
+The native transport dependency and its actual license are recorded in `native/qqmusic-login/THIRD_PARTY_NOTICES.md` and its included license files. The pinned `github.com/coder/websocket v1.8.15` dependency uses the ISC license and is vendored at `native/qqmusic-login/vendor/github.com/coder/websocket/`; its retained notice appears both there and in `native/qqmusic-login/licenses/coder-websocket/LICENSE.txt`. It is used only by the optional App-scanner helper. Existing QQ and WeChat flows require no helper process.
+
 ## Bundled runtime dependencies
 
 - jsQR 1.4.0, Apache-2.0: `licenses/jsqr.LICENSE`.

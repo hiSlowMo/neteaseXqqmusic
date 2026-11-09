@@ -2,17 +2,18 @@
 
 网易云 + QQ 音乐双平台插件，适用于 MyGo Music。目标宿主为 [egoist/mygo-music](https://github.com/egoist/mygo-music) **0.1.20 或兼容后续版本**，不需要修改或重新编译播放器。源码采用 AGPL-3.0-only。
 
-**当前版本 0.1.2 默认保留原始歌名，改善与外部歌词工具的兼容性。** 0.1.0 已有本机用户确认登录测试可行。provider 完整自动化回归、独立宿主集成测试，以及各类会员歌曲和长期续期仍未完整验证；插件岛实际歌词匹配也需实测确认，详见 [验证记录](docs/validation.md)。
+**v0.1.4 包含 QQ 音乐 App 扫码、音源分组与播放地址加载优化。** 相同歌曲和音质的地址解析会合并，并在同账号会话内短时复用 30 秒，不改变音质或账号权限。App 扫码已由本机用户实测可用，分组视图默认保留原始歌名。缓存优化通过完整离线回归，尚无同曲同音质的真实 CDN 对比数据；宿主顺序下载造成的后段 seek 等待不能仅靠该缓存解决。独立宿主集成、长期续期和插件岛实际歌词匹配仍需验证，详见 [验证记录](docs/validation.md)。
 
 ## 已实现
 
-- 网易云、QQ 各自保存登录状态，可同时登录；QQ 支持手机 QQ 或微信扫码。
+- 网易云、QQ 各自保存登录状态，可同时登录；QQ 支持手机 QQ、QQ 音乐 App 或微信扫码。App 扫码使用随包内置的辅助程序，需在 MyGo 授权运行程序。
 - 一个搜索入口同时查询两边，优先展示标准化后标题完全相同的结果，再按标题前缀、包含及歌手匹配排序。歌曲按平台保留独立 ID，默认使用原始歌名；可在设置中开启 `〔网易云〕` / `〔QQ〕` 标题标签。
+- 侧栏“按音源查看”将最近搜索已加载结果、最近播放和本地混合歌单按网易云 / QQ 音乐分组。搜索加 `qq:` / `netease:` 前缀可临时指定平台，也可设置默认搜索音源；歌曲和歌手元数据保持原样。
 - 两个服务独立分页，单个服务失败时仍展示另一个服务的结果。
 - 从歌曲 ID 的来源路由播放、歌词、专辑、歌手和喜欢操作。歌曲完整播放链接由原服务按当前登录账号提供；不根据 VIP 标记提前禁止选择，也不返回试听片段冒充完整歌曲。
 - 新建本地混合歌单，混合添加、去重、移除、重排、改名、删除；重启后恢复完整歌曲资料。云端自建和收藏歌单可浏览，云端歌单在本插件中为只读。
 - 两边喜欢的音乐、发现页、电台、最近播放。
-- QQ 播放前检查会话过期、合并并发续期；旧请求不能覆盖新登录或退出。歌曲解析重新读取 song MID 和 MediaMID，兼容旧歌单仅有数字 ID 的情况。
+- QQ 播放前检查会话过期、合并并发续期；旧请求不能覆盖新登录或退出。歌曲解析重新读取 song MID 和 MediaMID，兼容旧歌单仅有数字 ID 的情况。相同歌曲与音质的并发地址解析合并，成功地址短时内存复用 30 秒；退出、换账号或续期代际改变后不复用，失败不缓存，不写磁盘。
 - 离线转换旧定制版的本地歌单，导入去重。不会自动读取旧应用账号、钥匙串或会话文件。
 
 ## 安装
@@ -21,7 +22,7 @@
 
 [在 MyGo Music 中安装](mygo-music://install-plugin?repo=hiSlowMo/neteaseXqqmusic) · [下载最新版本](https://github.com/hiSlowMo/neteaseXqqmusic/releases/latest)
 
-也可在原版 **MyGo Music** 的 Settings → Plugins → `+` 中填写仓库地址 `https://github.com/hiSlowMo/neteaseXqqmusic`，或使用本地 ZIP 安装，选择 `neteaseXqqmusic-0.1.2.zip`。若界面只提供插件目录入口，可解压 ZIP，令 `plugin.json` 位于一个独立插件文件夹的根目录，再重启/重新加载插件。
+也可在原版 **MyGo Music** 的 Settings → Plugins → `+` 中填写仓库地址 `https://github.com/hiSlowMo/neteaseXqqmusic`，或从 Release 下载 `neteaseXqqmusic-0.1.4.zip` 通过本地 ZIP 安装。若界面只提供插件目录入口，可解压 ZIP，令 `plugin.json` 位于一个独立插件文件夹的根目录，再重启/重新加载插件。
 
 文件结构至少包含：
 
@@ -29,10 +30,13 @@
 music-fusion/
   plugin.json
   dist/index.js
+  bin/qqmusic-login-darwin-arm64
+  bin/qqmusic-login-<其他系统与架构>
+  native/qqmusic-login/
   locales/zh-CN.json
 ```
 
-ZIP 同时包含完整源码、构建脚本、测试、依赖锁文件和许可。使用插件本身无需 Node、Go、MPV 或额外 API 服务。原定制版“ MyGo 云音乐 0.2.21 ”使用另一套原生扩展接口，不能直接安装此插件。
+ZIP 包含六种系统 / 架构的辅助程序、完整源码、构建脚本、测试、依赖锁文件和许可。使用插件本身无需另行安装 Node、Go、MPV 或额外 API 服务。原定制版“ MyGo 云音乐 0.2.21 ”使用另一套原生扩展接口，不能直接安装此插件。
 
 ## 登录两个平台
 
@@ -41,16 +45,29 @@ MyGo Music 0.1.20 的插件设置为文本框，按以下值填写，回车或�
 | 设置 | 可填值 | 默认 |
 | --- | --- | --- |
 | 登录目标 | `both`（两个平台）、`netease`（网易云）、`qqmusic`（QQ） | `both` |
-| QQ 音乐扫码方式 | `qq`（手机 QQ）、`wechat`（微信） | `qq` |
+| QQ 音乐扫码方式 | `qq`（手机 QQ）、`qqmusic`（QQ 音乐 App）、`wechat`（微信） | `qq` |
+| 搜索音源 | `both`（双平台）、`netease`（网易云）、`qqmusic`（QQ 音乐） | `both` |
 | 歌名显示平台标签 | `true`（开启）、`false` 或留空（关闭） | 关闭 |
 
 使用插件岛等依赖系统媒体信息匹配歌词的工具时，请关闭“歌名显示平台标签”。旧版本已加入播放队列的歌曲可能保留带标签的标题；更新或更改设置后，请从搜索或歌单重新加入歌曲以替换旧标题。无需删除歌单或重新登录。
 
-首次点 Sign In，依次使用网易云 App 和手机 QQ 扫码。使用微信会员时，先将扫码方式填为 `wechat`。两次登录独立保存，第二次扫码失败后可以重试，已完成的平台不用重复扫码。
+首次点 Sign In，依次使用网易云 App 和所选的 QQ 平台扫码方式。手机 QQ 填 `qq`；QQ 音乐 App 填 `qqmusic`；微信会员填 `wechat`，并使用对应账号。两次登录独立保存，第二次扫码失败后可以重试，已完成的平台不用重复扫码。
+
+QQ 音乐 App 扫码首次需到 Settings → Plugins → NetEaseXQQMusic 点击 **Allow Programs**（允许运行程序），然后点 Sign In。程序已包含在 ZIP 中，只在此扫码方式运行，完成、拒绝或超时后退出；仅直连腾讯，不启动本地服务器。未授权时会明确提示，不会自动改用手机 QQ 二维码。手机 QQ / 微信扫码和普通搜索播放均无需该程序权限。
+
+要用 App 方式替换已有 QQ 登录，先把“登录目标”设为 `qqmusic`，再 Sign Out → Sign In，网易云登录保留。仅修改扫码方式不会退出原 QQ 账号。
 
 若只登录/更换一个平台，先填写对应“登录目标”。目标尚未登录时会显示 Sign In。需要更换其账号时点 Sign Out，再点 Sign In；另一平台的凭据保留。填写 `both` 时 Sign Out 会退出两个平台。设置目标尚未登录时，上游会临时视这个组合源为未登录，歌单编辑需先完成该目标登录，或把目标切回已经登录的平台。
 
 新插件需要重新扫码。旧应用仍使用自己的数据，本项目没有迁移或修改其凭据。
+
+## 区分网易云与 QQ 音源
+
+- 搜索 `qq: 反方向的钟` 只返回 QQ 音乐；`netease: 歌名` 只返回网易云。前缀会保留到搜索建议中，播放仍按歌曲本身 ID 路由。
+- 设置“搜索音源”为 `netease` / `qqmusic` 可固定默认范围，`both` 恢复双平台；前缀可临时覆盖此设置，不影响账号登录。
+- 侧栏“按音源查看”将最近一次歌曲搜索中**已加载**的各页结果及最近播放按平台分组；页面内的混合歌单入口也按平台分组。原歌单保持原来的顺序和编辑方式。
+
+宿主当前没有给插件提供逐曲音源徽标字段，因此全局混合搜索和播放队列还不能在歌名之外增加自定义徽标。需要这些列表直接显示来源时，可选择开启“歌名显示平台标签”，但外部歌词工具可能受影响；默认维持原标题。
 
 ## 混合歌单与旧数据导入
 
@@ -80,7 +97,7 @@ node scripts/import-playlists.mjs "$HOME/Library/Application Support/MyGo 云音
 
 ## 开发和验证
 
-需要 Node.js 22+；构建不需要运行任何第三方安装脚本：
+JS 构建需要 Node.js 22+；构建随包辅助程序还需 Go 1.27.3（此版本用于本地交叉构建）。使用插件无需安装这些工具。构建不需要运行第三方安装脚本：
 
 ```bash
 npm ci --ignore-scripts
@@ -100,10 +117,24 @@ npm run test:core
 npm test
 ```
 
+原生辅助程序测试只使用合成 MQTT 帧和 loopback WebSocket，不生成真实二维码；`smoke:native` 会启动本机架构的实际程序，读取 ready 后关闭 stdin 验证退出，不连接腾讯。
+
 真实宿主集成测试需要克隆的原版 MyGo Music 源码和它要求的 Go 工具链。脚本用 Go overlay 加入测试，不修改宿主文件，网络传输全部替换为合成响应：
 
 ```bash
 npm run test:runtime -- /path/to/mygo-music
+```
+
+```bash
+npm run test:native
+```
+
+```bash
+npm run build:native
+```
+
+```bash
+npm run smoke:native
 ```
 
 ```bash
@@ -112,7 +143,7 @@ npm run pack
 
 设计见 [architecture.md](docs/architecture.md)，版本变化见 [CHANGELOG.md](CHANGELOG.md)，许可及来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。GitHub Actions 会检查核心测试、构建产物与源码是否一致，并验证安装包。
 
-维护者发布已提交的 v0.1.2 时，可运行以下脚本。它只接受 `hiSlowMo` 的 GitHub 登录，核对干净工作区和安装包校验和，然后创建公开仓库、推送 `main`、添加 `mygo-music-plugin` 主题并上传 Release；已有 Release 不会被覆盖。
+维护者确认候选版可以公开发布并提交后，可显式运行以下脚本。它从 `plugin.json` 读取版本，要求对应发布说明、非草稿标记和安装包，仅接受 `hiSlowMo` 的 GitHub 登录；核对干净工作区和校验和后推送 `main`、添加主题并上传 Release，已有 Release 不会被覆盖。本轮已生成本地安装包，但未运行发布脚本，公开 Release 仍为 0.1.2。
 
 ```bash
 bash scripts/publish.sh

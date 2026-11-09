@@ -6,8 +6,18 @@ set -euo pipefail
 plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$plugin_root"
 plugin_repo='hiSlowMo/neteaseXqqmusic'
-plugin_tag='v0.1.2'
-plugin_archive='neteaseXqqmusic-0.1.2.zip'
+plugin_version="$(node -p 'JSON.parse(require("fs").readFileSync("plugin.json", "utf8")).version')"
+plugin_tag="v$plugin_version"
+plugin_archive="neteaseXqqmusic-$plugin_version.zip"
+plugin_notes="docs/release-$plugin_tag.md"
+if [[ ! -f "$plugin_notes" ]]; then
+  printf 'Prepare release notes before publishing: %s\n' "$plugin_notes" >&2
+  exit 1
+fi
+if grep -q '发布说明草稿' "$plugin_notes"; then
+  printf 'Remove the draft warning only after native builds and package verification pass.\n' >&2
+  exit 1
+fi
 
 plugin_account="$(gh api user --jq .login)"
 if [[ "$plugin_account" != 'hiSlowMo' ]]; then
@@ -44,7 +54,7 @@ gh repo edit "$plugin_repo" --default-branch main --add-topic mygo-music-plugin 
 if gh release view "$plugin_tag" --repo "$plugin_repo" >/dev/null 2>&1; then
   printf 'Release %s already exists; leaving it unchanged.\n' "$plugin_tag"
 else
-  gh release create "$plugin_tag" "releases/$plugin_archive" "releases/$plugin_archive.sha256" --repo "$plugin_repo" --target "$(git rev-parse HEAD)" --title 'v0.1.2 - NetEaseXQQMusic' --notes-file docs/release-v0.1.2.md --latest
+  gh release create "$plugin_tag" "releases/$plugin_archive" "releases/$plugin_archive.sha256" --repo "$plugin_repo" --target "$(git rev-parse HEAD)" --title "$plugin_tag - NetEaseXQQMusic" --notes-file "$plugin_notes" --latest
 fi
 
 gh repo view "$plugin_repo" --json url,visibility,repositoryTopics

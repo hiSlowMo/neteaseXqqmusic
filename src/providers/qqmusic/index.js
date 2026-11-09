@@ -2,12 +2,16 @@
 // Adapted from Amamiya23/mygo-music-qq-plugin; see THIRD_PARTY_NOTICES.md.
 import { providerHost } from '../../host.js';
 import { createSessionStore, validSession } from './session.js';
+import { createStreamCache } from '../../stream-cache.js';
 import { qqFetch as fetch } from './http.js';
 const host = providerHost('qqmusic');
 const sessions = createSessionStore({ storage: host.storage, refresh: s => refreshWechatSession(s, fetch) });
 
 import { qqSignIn } from './auth-qq.js';
-import { wechatSignIn, wechatDeviceComm, refreshWechatSession } from './auth-wechat.js';
+import { wechatSignIn, wechatDeviceComm, refreshWechatSession, prepareQQDevice } from './auth-wechat.js';
+import { qqMusicAppSignIn } from './auth-app.js';
+import { parseQQLoginMethod } from './login-method.js';
+let appLoginAbort = null;
 import { decodeQR } from './qr.js';
 import { wechatRandom, wechatCookieFetch } from './wechat-host.js';
 
@@ -180,6 +184,10 @@ async function streamOnce(id, quality, session, signal) {
   throw Object.assign(new Error('QQ 音乐暂未提供完整播放链接，请检查对应账号与歌曲权限'), { code: 'unavailable', missingStream: true });
 }
 export async function stream({ id, quality = 'standard' }) {
+  return streamCache.stream(String(id), quality);
+}
+const streamCache = createStreamCache({ version: sessions.version, load: resolveStream });
+async function resolveStream(id, quality) {
   // Stay within MyGo's 30-second call deadline even with quality fallbacks.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 24000);
@@ -368,16 +376,27 @@ export async function qqFinishSignIn(value, expected = sessions.version()) {
   if (!session) throw qqAuthError('QQ Music login returned an invalid credential');
   const profile = await qqAccountFor(session);
   sessions.set(session, expected);
+  streamCache.clear();
   searchPages.clear();
   return profile;
 }
 
 export async function signIn() {
   const expected = sessions.version();
-  const method = (typeof host.setting === 'function' ? host.setting('loginMethod') : '').trim().toLowerCase();
-  if (method && method !== 'qq' && method !== 'wechat' && method !== '微信') throw qqAuthError('Login method must be QQ or WeChat');
+  const method = parseQQLoginMethod(typeof host.setting === 'function' ? host.setting('loginMethod') : '');
+  appLoginAbort?.abort();
   const deps = { fetch, decodeQR, prompt: value => host.signInPrompt(value), sleep: ms => new Promise(resolve => setTimeout(resolve, ms)) };
-  if (method === 'wechat' || method === '微信') {
+  if (method === 'qqmusic') {
+    const controller = new AbortController();
+    appLoginAbort = controller;
+    try {
+      const value = await qqMusicAppSignIn({ ...deps, platform: host.platform, arch: host.arch,
+        spawn: (command, args) => host.spawn(command, args), prepareDevice: prepareQQDevice,
+        deviceComm: wechatDeviceComm, signal: controller.signal, isCurrent: () => sessions.version() === expected });
+      return await qqFinishSignIn(value, expected);
+    } finally { if (appLoginAbort === controller) appLoginAbort = null; }
+  }
+  if (method === 'wechat') {
     deps.randomBytes = await wechatRandom(fetch, text => host.crypto.md5(text));
     deps.fetch = wechatCookieFetch(fetch);
     return qqFinishSignIn(await wechatSignIn(deps), expected);
@@ -390,7 +409,7 @@ export async function account() {
   try { return await sessions.run(s => qqAccountFor(s), { anonymous: false }); }
   catch (e) { if (e.code === 'signIn') return null; throw e; }
 }
-export function signOut() { sessions.clear(); searchPages.clear(); }
+export function signOut() { appLoginAbort?.abort(); appLoginAbort = null; sessions.clear(); streamCache.clear(); searchPages.clear(); }
 
 // Inject index.js helpers and export the returned handlers when integrating.
 export function createBrowse({ rpc, cgi, trackOf, t = value => value }) {
