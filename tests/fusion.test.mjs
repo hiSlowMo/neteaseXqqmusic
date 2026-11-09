@@ -27,13 +27,102 @@ test('exact title wins while identical numeric IDs remain separate', async () =>
   const { api, calls } = setup();
   const found = await api.search({ query: '反方向的钟' });
   assert.deepEqual(found.tracks.map(t => t.id), ['qqmusic:9', 'netease:9']);
-  assert.match(found.tracks[0].name, /〔QQ〕$/);
+  assert.equal(found.tracks[0].name, '反方向的钟');
   assert.equal(found.tracks[0].unavailable, false);
   assert.equal(found.tracks[1].album.id, 'netease:8');
   await api.stream({ id: found.tracks[0].id, quality: 'lossless' });
   assert.deepEqual(calls, [['qqmusic', { id: '9', quality: 'lossless' }]]);
   assert.equal(relevance(song('1', '反方向，的钟'), '反 方 向 的 钟'), 0);
   assert.equal(relevance(song('1', '其他歌'), '周杰伦'), 3);
+});
+
+// External lyric tools receive the host's title, so provider routing must not decorate media metadata.
+test('raw media titles preserve artist credits and route lyrics by provider ID', async () => {
+  const requests = [];
+  const custom = Object.fromEntries(['netease', 'qqmusic'].map(provider => [provider, {
+    search: async () => ({ tracks: [{ ...song('9', 'May I Ask'), artists: [{ id: '7', name: 'Luke Chiang' }, { id: '6', name: 'Alexis Kim' }], album: { id: '8', name: 'May I Ask' } }], more: false }),
+    lyrics: async args => { requests.push([provider, args]); return { lrc: '[00:01.00]May I ask', translation: '' }; },
+  }]));
+  const { api } = setup(custom);
+  const found = await api.search({ query: 'May I Ask' });
+  assert.deepEqual(found.tracks.map(t => t.id), ['netease:9', 'qqmusic:9']);
+  for (const track of found.tracks) {
+    assert.equal(track.name, 'May I Ask');
+    assert.deepEqual(track.artists.map(a => a.name), ['Luke Chiang', 'Alexis Kim']);
+    assert.equal(track.album.name, 'May I Ask');
+    assert.equal((await api.lyrics({ id: track.id })).lrc, '[00:01.00]May I ask');
+  }
+  assert.deepEqual(requests, [['netease', { id: '9' }], ['qqmusic', { id: '9' }]]);
+});
+
+// Titles saved before the fix must be clean when reopening playlists or playing from recent history.
+test('legacy playlist, recent and catalog titles are restored without losing identity', async () => {
+  const old = { ...song('netease:9', 'May I Ask 〔网易云〕'), artists: [{ id: 'netease:7', name: 'Luke Chiang' }], album: { id: 'netease:8', name: 'May I Ask' } };
+  const cached = { ...old, id: 'qqmusic:10', name: 'Another Song 〔QQ〕' };
+  const storage = new Map([
+    ['fusion.playlists', [{ id: 'local:1', name: 'Saved Mix', mine: true, tracks: [old], trackCount: 1 }]],
+    ['fusion.playlistSequence', 1], ['fusion.recent', [old]], ['fusion.catalog', { [cached.id]: cached }],
+  ]);
+  const { api, providers, host, settings } = setup({}, storage);
+  assert.equal((await api.playlist({ id: 'local:1' })).tracks[0].name, 'May I Ask');
+  assert.equal((await api.playlists())[0].tracks[0].name, 'May I Ask');
+  assert.equal((await api.home()).sections[1].playlists[0].tracks[0].name, 'May I Ask');
+  assert.equal(api.recent()[0].name, 'May I Ask');
+  await api.addToPlaylist({ id: 'local:1', trackIds: [cached.id] });
+  await api.played({ id: cached.id });
+  settings.set('showSourceInTitle', 'true');
+  api.setSetting({ key: 'showSourceInTitle', value: 'true' });
+  assert.deepEqual((await api.playlist({ id: 'local:1' })).tracks.map(t => t.name), ['May I Ask 〔网易云〕', 'Another Song 〔QQ〕']);
+  settings.set('showSourceInTitle', 'false');
+  api.setSetting({ key: 'showSourceInTitle', value: 'false' });
+  const restarted = createFusion(providers, host);
+  assert.deepEqual((await restarted.playlist({ id: 'local:1' })).tracks.map(t => [t.id, t.name]), [['netease:9', 'May I Ask'], ['qqmusic:10', 'Another Song']]);
+  assert.deepEqual(restarted.recent().map(t => t.name), ['Another Song', 'May I Ask']);
+});
+
+// Toggling labels must refresh cached search results and preserve suffixes that belong to the song itself.
+test('optional source labels are reversible and retain genuine provider titles', async () => {
+  const { api, settings, providers, host } = setup({
+    netease: { search: async () => ({ tracks: [], more: false }) },
+    qqmusic: { search: async () => ({ tracks: [song('9', 'A real title 〔QQ〕')], more: false }) },
+  });
+  const query = 'A real title';
+  assert.equal((await api.search({ query })).tracks[0].name, 'A real title 〔QQ〕');
+  settings.set('showSourceInTitle', 'true');
+  api.setSetting({ key: 'showSourceInTitle', value: 'true' });
+  assert.equal((await api.search({ query })).tracks[0].name, 'A real title 〔QQ〕 〔QQ〕');
+  const list = api.createPlaylist({ name: 'Original titles' });
+  await api.addToPlaylist({ id: list.id, trackIds: ['qqmusic:9'] });
+  await api.played({ id: 'qqmusic:9' });
+  settings.set('showSourceInTitle', '');
+  api.setSetting({ key: 'showSourceInTitle', value: '' });
+  const restarted = createFusion(providers, host);
+  assert.equal((await restarted.search({ query })).tracks[0].name, 'A real title 〔QQ〕');
+  assert.equal((await restarted.playlist({ id: list.id })).tracks[0].name, 'A real title 〔QQ〕');
+  assert.equal(restarted.recent()[0].name, 'A real title 〔QQ〕');
+  assert.throws(() => api.setSetting({ key: 'showSourceInTitle', value: 'maybe' }), { code: 'setup' });
+});
+
+// Import fingerprints from 0.1.1 must still prevent duplication when the setting is saved after updating.
+test('legacy import fingerprints survive title normalization and new conversions preserve titles', async () => {
+  const oldTrack = { ...song('netease:9', 'May I Ask 〔网易云〕'), unavailable: false };
+  const incoming = [{ name: 'Imported', description: '', tracks: [oldTrack] }];
+  const fingerprint = createHash('md5').update(JSON.stringify(incoming)).digest('hex');
+  const saved = { ...incoming[0], id: 'local:1', mine: true, importKey: fingerprint };
+  for (const markers of [[fingerprint], []]) {
+    const storage = new Map([['fusion.playlists', [saved]], ['fusion.playlistSequence', 1], ['fusion.imports', markers]]);
+    const { api } = setup({}, storage);
+    api.setSetting({ key: 'importPlaylists', value: JSON.stringify({ format: 'mygo-music-fusion', version: 1, playlists: incoming }) });
+    const lists = await api.playlists();
+    assert.equal(lists.length, 1);
+    assert.equal(lists[0].tracks[0].name, 'May I Ask');
+  }
+  const { data } = convertLegacy([{ id: -1, name: 'Legacy', tracks: [{ id: 10, src: 'qqmusic', name: 'A real title 〔QQ〕' }] }]);
+  const { api } = setup();
+  api.setSetting({ key: 'importPlaylists', value: JSON.stringify(data) });
+  const track = (await api.playlists())[0].tracks[0];
+  assert.equal(track.id, 'qqmusic:10');
+  assert.equal(track.name, 'A real title 〔QQ〕');
 });
 
 // MyGo counts the merged page; each provider must keep its own raw cursor.

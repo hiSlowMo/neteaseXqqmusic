@@ -2,12 +2,12 @@
 
 网易云 + QQ 音乐双平台插件，适用于 MyGo Music。目标宿主为 [egoist/mygo-music](https://github.com/egoist/mygo-music) **0.1.20 或兼容后续版本**，不需要修改或重新编译播放器。源码采用 AGPL-3.0-only。
 
-**当前版本 0.1.1 使用新名称 NetEaseXQQMusic。** 0.1.0 已有本机用户确认登录测试可行；18 项核心离线测试和 JS 构建通过。provider 完整自动化回归、独立宿主集成测试，以及各类会员歌曲和长期续期仍未完整验证，详见 [验证记录](docs/validation.md)。
+**当前版本 0.1.2 默认保留原始歌名，改善与外部歌词工具的兼容性。** 0.1.0 已有本机用户确认登录测试可行。provider 完整自动化回归、独立宿主集成测试，以及各类会员歌曲和长期续期仍未完整验证；插件岛实际歌词匹配也需实测确认，详见 [验证记录](docs/validation.md)。
 
 ## 已实现
 
 - 网易云、QQ 各自保存登录状态，可同时登录；QQ 支持手机 QQ 或微信扫码。
-- 一个搜索入口同时查询两边，优先展示标准化后标题完全相同的结果，再按标题前缀、包含及歌手匹配排序。每首歌曲保留 `〔网易云〕` / `〔QQ〕` 标签，不把两个版权版本合并成一首。
+- 一个搜索入口同时查询两边，优先展示标准化后标题完全相同的结果，再按标题前缀、包含及歌手匹配排序。歌曲按平台保留独立 ID，默认使用原始歌名；可在设置中开启 `〔网易云〕` / `〔QQ〕` 标题标签。
 - 两个服务独立分页，单个服务失败时仍展示另一个服务的结果。
 - 从歌曲 ID 的来源路由播放、歌词、专辑、歌手和喜欢操作。歌曲完整播放链接由原服务按当前登录账号提供；不根据 VIP 标记提前禁止选择，也不返回试听片段冒充完整歌曲。
 - 新建本地混合歌单，混合添加、去重、移除、重排、改名、删除；重启后恢复完整歌曲资料。云端自建和收藏歌单可浏览，云端歌单在本插件中为只读。
@@ -21,7 +21,7 @@
 
 [在 MyGo Music 中安装](mygo-music://install-plugin?repo=hiSlowMo/neteaseXqqmusic) · [下载最新版本](https://github.com/hiSlowMo/neteaseXqqmusic/releases/latest)
 
-也可在原版 **MyGo Music** 的 Settings → Plugins → `+` 中填写仓库地址 `https://github.com/hiSlowMo/neteaseXqqmusic`，或使用本地 ZIP 安装，选择 `neteaseXqqmusic-0.1.1.zip`。若界面只提供插件目录入口，可解压 ZIP，令 `plugin.json` 位于一个独立插件文件夹的根目录，再重启/重新加载插件。
+也可在原版 **MyGo Music** 的 Settings → Plugins → `+` 中填写仓库地址 `https://github.com/hiSlowMo/neteaseXqqmusic`，或使用本地 ZIP 安装，选择 `neteaseXqqmusic-0.1.2.zip`。若界面只提供插件目录入口，可解压 ZIP，令 `plugin.json` 位于一个独立插件文件夹的根目录，再重启/重新加载插件。
 
 文件结构至少包含：
 
@@ -42,6 +42,9 @@ MyGo Music 0.1.20 的插件设置为文本框，按以下值填写，回车或�
 | --- | --- | --- |
 | 登录目标 | `both`（两个平台）、`netease`（网易云）、`qqmusic`（QQ） | `both` |
 | QQ 音乐扫码方式 | `qq`（手机 QQ）、`wechat`（微信） | `qq` |
+| 歌名显示平台标签 | `true`（开启）、`false` 或留空（关闭） | 关闭 |
+
+使用插件岛等依赖系统媒体信息匹配歌词的工具时，请关闭“歌名显示平台标签”。旧版本已加入播放队列的歌曲可能保留带标签的标题；更新或更改设置后，请从搜索或歌单重新加入歌曲以替换旧标题。无需删除歌单或重新登录。
 
 首次点 Sign In，依次使用网易云 App 和手机 QQ 扫码。使用微信会员时，先将扫码方式填为 `wechat`。两次登录独立保存，第二次扫码失败后可以重试，已完成的平台不用重复扫码。
 
@@ -109,7 +112,7 @@ npm run pack
 
 设计见 [architecture.md](docs/architecture.md)，版本变化见 [CHANGELOG.md](CHANGELOG.md)，许可及来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。GitHub Actions 会检查核心测试、构建产物与源码是否一致，并验证安装包。
 
-维护者发布已提交的 v0.1.1 时，可运行以下脚本。它只接受 `hiSlowMo` 的 GitHub 登录，核对干净工作区和安装包校验和，然后创建公开仓库、推送 `main`、添加 `mygo-music-plugin` 主题并上传 Release；已有 Release 不会被覆盖。
+维护者发布已提交的 v0.1.2 时，可运行以下脚本。它只接受 `hiSlowMo` 的 GitHub 登录，核对干净工作区和安装包校验和，然后创建公开仓库、推送 `main`、添加 `mygo-music-plugin` 主题并上传 Release；已有 Release 不会被覆盖。
 
 ```bash
 bash scripts/publish.sh

@@ -6,8 +6,8 @@ set -euo pipefail
 plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$plugin_root"
 plugin_repo='hiSlowMo/neteaseXqqmusic'
-plugin_tag='v0.1.1'
-plugin_archive='neteaseXqqmusic-0.1.1.zip'
+plugin_tag='v0.1.2'
+plugin_archive='neteaseXqqmusic-0.1.2.zip'
 
 plugin_account="$(gh api user --jq .login)"
 if [[ "$plugin_account" != 'hiSlowMo' ]]; then
@@ -44,7 +44,7 @@ gh repo edit "$plugin_repo" --default-branch main --add-topic mygo-music-plugin 
 if gh release view "$plugin_tag" --repo "$plugin_repo" >/dev/null 2>&1; then
   printf 'Release %s already exists; leaving it unchanged.\n' "$plugin_tag"
 else
-  gh release create "$plugin_tag" "releases/$plugin_archive" "releases/$plugin_archive.sha256" --repo "$plugin_repo" --target "$(git rev-parse HEAD)" --title 'v0.1.1 - NetEaseXQQMusic' --notes-file docs/release-v0.1.1.md --latest
+  gh release create "$plugin_tag" "releases/$plugin_archive" "releases/$plugin_archive.sha256" --repo "$plugin_repo" --target "$(git rev-parse HEAD)" --title 'v0.1.2 - NetEaseXQQMusic' --notes-file docs/release-v0.1.2.md --latest
 fi
 
 gh repo view "$plugin_repo" --json url,visibility,repositoryTopics

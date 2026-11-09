@@ -66,10 +66,29 @@ export function createFusion(providers, host) {
   function album(provider, item = {}) {
     return { ...item, id: identify(provider, item.id), artists: (item.artists || []).map(a => artist(provider, a)) };
   }
+  // 0.1.1 stored the display suffix in track names. Keep the original title
+  // separately so toggling labels never accumulates suffixes or changes IDs.
+  function storedTrack(item) {
+    const provider = /^(netease|qqmusic):/.exec(String(item.id))?.[1];
+    const hasOriginal = typeof item.fusionOriginalName === 'string';
+    let name = hasOriginal ? item.fusionOriginalName : String(item.name || '未命名歌曲');
+    const suffix = provider ? ` 〔${LABEL[provider]}〕` : '';
+    if (!hasOriginal && suffix && name.endsWith(suffix)) name = name.slice(0, -suffix.length);
+    return { ...item, name, fusionOriginalName: name };
+  }
+  function presentTrack(item) {
+    const { fusionOriginalName, ...result } = storedTrack(item);
+    const provider = /^(netease|qqmusic):/.exec(String(result.id))?.[1];
+    if (provider && setting('showSourceInTitle').trim().toLowerCase() === 'true') result.name = `${fusionOriginalName} 〔${LABEL[provider]}〕`;
+    return result;
+  }
+  function presentPlaylist(item) {
+    return { ...item, ...(item.tracks ? { tracks: item.tracks.map(presentTrack) } : {}) };
+  }
   function track(provider, item) {
+    const name = String(item.name || '未命名歌曲');
     const result = {
-      ...item, id: identify(provider, item.id),
-      name: `${item.name || '未命名歌曲'} 〔${LABEL[provider]}〕`,
+      ...item, id: identify(provider, item.id), name, fusionOriginalName: name,
       artists: (item.artists || []).map(a => artist(provider, a)), album: album(provider, item.album),
     };
     if (item.showId) result.showId = identify(provider, item.showId);
@@ -90,7 +109,7 @@ export function createFusion(providers, host) {
     write('catalog', catalog);
     return items;
   }
-  const tracks = (provider, items = []) => remember(items.filter(t => t?.id).map(t => track(provider, t)));
+  const tracks = (provider, items = []) => remember(items.filter(t => t?.id).map(t => track(provider, t))).map(presentTrack);
   function playlistSummary(provider, item) {
     return {
       ...item, id: identify(provider, item.id), name: `${LABEL[provider]} · ${item.name || '歌单'}`,
@@ -120,7 +139,7 @@ export function createFusion(providers, host) {
       })),
     };
   }
-  function localLists() { return read('playlists', []); }
+  function localLists() { return read('playlists', []).map(list => ({ ...list, tracks: (list.tracks || []).map(storedTrack) })); }
   function localList(id) {
     const list = localLists().find(p => p.id === id);
     if (!list) throw error('unavailable', '本地歌单不存在');
@@ -237,7 +256,7 @@ export function createFusion(providers, host) {
       state.nextOffset = offset + result.length;
       // An empty merged page cannot advance the app's cursor. Keep failures
       // visible through status rather than returning an endless 'more' loop.
-      return { [kind]: result, more: result.length > 0 && SOURCES.some(p => state.cursors[p].more && !(kind === 'shows' && p === 'qqmusic')) };
+      return { [kind]: kind === 'tracks' ? result.map(presentTrack) : result, more: result.length > 0 && SOURCES.some(p => state.cursors[p].more && !(kind === 'shows' && p === 'qqmusic')) };
     })();
     state.pages.set(offset, pending);
     try { return clone(await pending); }
@@ -245,7 +264,7 @@ export function createFusion(providers, host) {
   }
 
   async function playlists() {
-    const result = localLists();
+    const result = localLists().map(presentPlaylist);
     const pages = await Promise.all(SOURCES.map(async provider => {
       try { return (await call(provider, 'playlists')).map(p => playlistSummary(provider, p)); }
       catch { return []; }
@@ -254,7 +273,7 @@ export function createFusion(providers, host) {
   }
   async function playlist({ id }) {
     const identity = splitID(id);
-    if (identity.provider === 'local') return localList(id);
+    if (identity.provider === 'local') return presentPlaylist(localList(id));
     return playlistSummary(identity.provider, await call(identity.provider, 'playlist', { id: identity.id }));
   }
   function createPlaylist({ name }) {
@@ -278,7 +297,7 @@ export function createFusion(providers, host) {
     const { provider, id: rawID } = splitID(id);
     if (!SOURCES.includes(provider)) throw error('unavailable', '无效歌曲来源');
     const cached = read('catalog', {})[id] || localLists().flatMap(p => p.tracks).find(t => t.id === id);
-    if (cached) return cached;
+    if (cached) return storedTrack(cached);
     // Resolve a track whose cache was evicted, without guessing another song
     // from a title search. Providers may rehydrate by their immutable ID.
     if (typeof providers[provider].track === 'function') {
@@ -330,7 +349,8 @@ export function createFusion(providers, host) {
     const lists = localLists();
     let sequence = Number(read('playlistSequence', 0));
     for (const p of incoming) {
-      const deduped = [...new Map(p.tracks.map(t => [t.id, t])).values()];
+      // Keep the fingerprint above identical to 0.1.1 for already imported JSON.
+      const deduped = [...new Map(p.tracks.map(t => [t.id, storedTrack(t)])).values()];
       lists.push({ ...p, tracks: deduped, id: `local:${++sequence}`, mine: true, owner: '本地混合歌单', trackCount: deduped.length, imageUrl: deduped.find(t => t.album?.imageUrl)?.album.imageUrl || '' });
     }
     write('playlistSequence', sequence);
@@ -345,7 +365,8 @@ export function createFusion(providers, host) {
     if (key === 'loginTarget') parseTarget(value);
     if (key === 'qqLoginMethod' && !['', 'qq', 'wechat', '微信'].includes(String(value).trim().toLowerCase())) throw error('setup', 'QQ 扫码方式请填写 qq 或 wechat');
     if (key === 'importPlaylists' && String(value).trim()) importLibrary(String(value));
-    if (key === 'loginTarget' || key === 'qqLoginMethod') searches.clear();
+    if (key === 'showSourceInTitle' && !['', 'true', 'false'].includes(String(value).trim().toLowerCase())) throw error('setup', '歌名平台标签请填写 true 或 false；留空默认关闭');
+    if (['loginTarget', 'qqLoginMethod', 'showSourceInTitle'].includes(key)) searches.clear();
   }
   async function home() {
     const profiles = read('profiles', {});
@@ -357,16 +378,16 @@ export function createFusion(providers, host) {
         { title: '音乐发现', links: [
           { title: '网易云音乐', subtitle: '推荐、排行榜、每日推荐', page: 'netease:home' },
           { title: 'QQ 音乐', subtitle: '推荐歌单、排行榜', page: 'qqmusic:home' },
-          { title: '账号与使用说明', subtitle: '两个账号分开登录，版权版本保留平台标签', page: 'accounts' },
+          { title: '账号与使用说明', subtitle: '两个账号分开登录，平台歌曲独立保留', page: 'accounts' },
         ] },
-        { title: '本地混合歌单', playlists: localLists(), empty: '使用侧栏的 + 新建歌单，再从搜索结果添加两边的歌曲。' },
+        { title: '本地混合歌单', playlists: localLists().map(presentPlaylist), empty: '使用侧栏的 + 新建歌单，再从搜索结果添加两边的歌曲。' },
       ],
     };
   }
   async function browse({ page }) {
     if (page === 'accounts') {
       const value = await home();
-      return { title: '账号与使用说明', description: `${value.description}\n\n在设置 → 插件 → NetEaseXQQMusic的“登录目标”中填写 both（两个平台）、netease（网易云）或 qqmusic（QQ），保存后点 Sign In。默认依次扫描两边二维码；也可单独登录或退出一个平台。QQ 扫码方式填写 qq（手机 QQ）或 wechat（微信）。\n\n带〔网易云〕或〔QQ〕的歌曲按原平台播放。新建歌单保存在本机，支持混合来源；平台歌单为只读。插件更新不会删除会话和本地歌单。\n\n播放完整链接受账号、版权和地区权限限制；暂停、缓冲及失败后是否跳歌由 MyGo Music 本体处理。`, sections: [] };
+      return { title: '账号与使用说明', description: `${value.description}\n\n在设置 → 插件 → NetEaseXQQMusic 的“登录目标”中填写 both（两个平台）、netease（网易云）或 qqmusic（QQ），保存后点 Sign In。默认依次扫描两边二维码；也可单独登录或退出一个平台。QQ 扫码方式填写 qq（手机 QQ）或 wechat（微信）。\n\n默认保留原始歌名，便于插件岛等工具匹配歌词。如需在歌名中显示〔网易云〕或〔QQ〕，可把“歌名显示平台标签”填写为 true；使用外部歌词工具时请关闭。更新或切换设置后，从搜索或歌单重新加入歌曲，才能替换旧播放队列里的标题。歌曲始终按原平台播放；平台歌单和发现页保留来源名称。新建歌单保存在本机，支持混合来源；平台歌单为只读。插件更新不会删除会话和本地歌单。\n\n播放完整链接受账号、版权和地区权限限制；暂停、缓冲及失败后是否跳歌由 MyGo Music 本体处理。`, sections: [] };
     }
     const { provider, id } = splitID(page);
     if (!SOURCES.includes(provider)) throw error('unsupported', '没有这个页面');
@@ -417,14 +438,14 @@ export function createFusion(providers, host) {
     return call(provider, name, { ...args, id });
   };
   async function played({ id }) {
-    const list = read('recent', []).filter(t => t.id !== id);
+    const list = read('recent', []).filter(t => t.id !== id).map(storedTrack);
     try { list.unshift(await resolveTrack(id)); } catch { return; }
     write('recent', list.slice(0, 100));
   }
   return {
     account, signIn, signOut, setSetting, home, browse, search, playlists, playlist,
     createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist, movePlaylistTrack,
-    recent: () => read('recent', []), played,
+    recent: () => read('recent', []).map(presentTrack), played,
     suggest: async ({ query }) => {
       const answers = await Promise.all(SOURCES.map(async p => {
         try { return await call(p, 'suggest', { query }); } catch { return []; }

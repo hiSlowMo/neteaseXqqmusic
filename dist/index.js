@@ -1,4 +1,4 @@
-// NetEaseXQQMusic 0.1.1 — AGPL-3.0-only; full source and notices included.
+// NetEaseXQQMusic 0.1.2 — AGPL-3.0-only; full source and notices included.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -16731,11 +16731,30 @@ function createFusion(providers, host3) {
   function album4(provider, item = {}) {
     return { ...item, id: identify(provider, item.id), artists: (item.artists || []).map((a) => artist4(provider, a)) };
   }
+  function storedTrack(item) {
+    const provider = /^(netease|qqmusic):/.exec(String(item.id))?.[1];
+    const hasOriginal = typeof item.fusionOriginalName === "string";
+    let name = hasOriginal ? item.fusionOriginalName : String(item.name || "\u672A\u547D\u540D\u6B4C\u66F2");
+    const suffix = provider ? ` \u3014${LABEL[provider]}\u3015` : "";
+    if (!hasOriginal && suffix && name.endsWith(suffix)) name = name.slice(0, -suffix.length);
+    return { ...item, name, fusionOriginalName: name };
+  }
+  function presentTrack(item) {
+    const { fusionOriginalName, ...result } = storedTrack(item);
+    const provider = /^(netease|qqmusic):/.exec(String(result.id))?.[1];
+    if (provider && setting("showSourceInTitle").trim().toLowerCase() === "true") result.name = `${fusionOriginalName} \u3014${LABEL[provider]}\u3015`;
+    return result;
+  }
+  function presentPlaylist(item) {
+    return { ...item, ...item.tracks ? { tracks: item.tracks.map(presentTrack) } : {} };
+  }
   function track3(provider, item) {
+    const name = String(item.name || "\u672A\u547D\u540D\u6B4C\u66F2");
     const result = {
       ...item,
       id: identify(provider, item.id),
-      name: `${item.name || "\u672A\u547D\u540D\u6B4C\u66F2"} \u3014${LABEL[provider]}\u3015`,
+      name,
+      fusionOriginalName: name,
       artists: (item.artists || []).map((a) => artist4(provider, a)),
       album: album4(provider, item.album)
     };
@@ -16753,7 +16772,7 @@ function createFusion(providers, host3) {
     write("catalog", catalog);
     return items;
   }
-  const tracks = (provider, items = []) => remember(items.filter((t) => t?.id).map((t) => track3(provider, t)));
+  const tracks = (provider, items = []) => remember(items.filter((t) => t?.id).map((t) => track3(provider, t))).map(presentTrack);
   function playlistSummary(provider, item) {
     return {
       ...item,
@@ -16788,7 +16807,7 @@ function createFusion(providers, host3) {
     };
   }
   function localLists() {
-    return read("playlists", []);
+    return read("playlists", []).map((list) => ({ ...list, tracks: (list.tracks || []).map(storedTrack) }));
   }
   function localList(id) {
     const list = localLists().find((p) => p.id === id);
@@ -16912,7 +16931,7 @@ function createFusion(providers, host3) {
       const result = items.map((v) => v.item);
       if (kind === "tracks") remember(result);
       state.nextOffset = offset + result.length;
-      return { [kind]: result, more: result.length > 0 && SOURCES.some((p) => state.cursors[p].more && !(kind === "shows" && p === "qqmusic")) };
+      return { [kind]: kind === "tracks" ? result.map(presentTrack) : result, more: result.length > 0 && SOURCES.some((p) => state.cursors[p].more && !(kind === "shows" && p === "qqmusic")) };
     })();
     state.pages.set(offset, pending);
     try {
@@ -16923,7 +16942,7 @@ function createFusion(providers, host3) {
     }
   }
   async function playlists4() {
-    const result = localLists();
+    const result = localLists().map(presentPlaylist);
     const pages = await Promise.all(SOURCES.map(async (provider) => {
       try {
         return (await call(provider, "playlists")).map((p) => playlistSummary(provider, p));
@@ -16935,7 +16954,7 @@ function createFusion(providers, host3) {
   }
   async function playlist4({ id }) {
     const identity = splitID(id);
-    if (identity.provider === "local") return localList(id);
+    if (identity.provider === "local") return presentPlaylist(localList(id));
     return playlistSummary(identity.provider, await call(identity.provider, "playlist", { id: identity.id }));
   }
   function createPlaylist3({ name }) {
@@ -16961,7 +16980,7 @@ function createFusion(providers, host3) {
     const { provider, id: rawID } = splitID(id);
     if (!SOURCES.includes(provider)) throw error("unavailable", "\u65E0\u6548\u6B4C\u66F2\u6765\u6E90");
     const cached = read("catalog", {})[id] || localLists().flatMap((p) => p.tracks).find((t) => t.id === id);
-    if (cached) return cached;
+    if (cached) return storedTrack(cached);
     if (typeof providers[provider].track === "function") {
       const found = track3(provider, await call(provider, "track", { id: rawID }));
       remember([found]);
@@ -17019,7 +17038,7 @@ function createFusion(providers, host3) {
     const lists = localLists();
     let sequence = Number(read("playlistSequence", 0));
     for (const p of incoming) {
-      const deduped = [...new Map(p.tracks.map((t) => [t.id, t])).values()];
+      const deduped = [...new Map(p.tracks.map((t) => [t.id, storedTrack(t)])).values()];
       lists.push({ ...p, tracks: deduped, id: `local:${++sequence}`, mine: true, owner: "\u672C\u5730\u6DF7\u5408\u6B4C\u5355", trackCount: deduped.length, imageUrl: deduped.find((t) => t.album?.imageUrl)?.album.imageUrl || "" });
     }
     write("playlistSequence", sequence);
@@ -17032,7 +17051,8 @@ function createFusion(providers, host3) {
     if (key === "loginTarget") parseTarget(value);
     if (key === "qqLoginMethod" && !["", "qq", "wechat", "\u5FAE\u4FE1"].includes(String(value).trim().toLowerCase())) throw error("setup", "QQ \u626B\u7801\u65B9\u5F0F\u8BF7\u586B\u5199 qq \u6216 wechat");
     if (key === "importPlaylists" && String(value).trim()) importLibrary(String(value));
-    if (key === "loginTarget" || key === "qqLoginMethod") searches.clear();
+    if (key === "showSourceInTitle" && !["", "true", "false"].includes(String(value).trim().toLowerCase())) throw error("setup", "\u6B4C\u540D\u5E73\u53F0\u6807\u7B7E\u8BF7\u586B\u5199 true \u6216 false\uFF1B\u7559\u7A7A\u9ED8\u8BA4\u5173\u95ED");
+    if (["loginTarget", "qqLoginMethod", "showSourceInTitle"].includes(key)) searches.clear();
   }
   async function home4() {
     const profiles = read("profiles", {});
@@ -17045,9 +17065,9 @@ function createFusion(providers, host3) {
         { title: "\u97F3\u4E50\u53D1\u73B0", links: [
           { title: "\u7F51\u6613\u4E91\u97F3\u4E50", subtitle: "\u63A8\u8350\u3001\u6392\u884C\u699C\u3001\u6BCF\u65E5\u63A8\u8350", page: "netease:home" },
           { title: "QQ \u97F3\u4E50", subtitle: "\u63A8\u8350\u6B4C\u5355\u3001\u6392\u884C\u699C", page: "qqmusic:home" },
-          { title: "\u8D26\u53F7\u4E0E\u4F7F\u7528\u8BF4\u660E", subtitle: "\u4E24\u4E2A\u8D26\u53F7\u5206\u5F00\u767B\u5F55\uFF0C\u7248\u6743\u7248\u672C\u4FDD\u7559\u5E73\u53F0\u6807\u7B7E", page: "accounts" }
+          { title: "\u8D26\u53F7\u4E0E\u4F7F\u7528\u8BF4\u660E", subtitle: "\u4E24\u4E2A\u8D26\u53F7\u5206\u5F00\u767B\u5F55\uFF0C\u5E73\u53F0\u6B4C\u66F2\u72EC\u7ACB\u4FDD\u7559", page: "accounts" }
         ] },
-        { title: "\u672C\u5730\u6DF7\u5408\u6B4C\u5355", playlists: localLists(), empty: "\u4F7F\u7528\u4FA7\u680F\u7684 + \u65B0\u5EFA\u6B4C\u5355\uFF0C\u518D\u4ECE\u641C\u7D22\u7ED3\u679C\u6DFB\u52A0\u4E24\u8FB9\u7684\u6B4C\u66F2\u3002" }
+        { title: "\u672C\u5730\u6DF7\u5408\u6B4C\u5355", playlists: localLists().map(presentPlaylist), empty: "\u4F7F\u7528\u4FA7\u680F\u7684 + \u65B0\u5EFA\u6B4C\u5355\uFF0C\u518D\u4ECE\u641C\u7D22\u7ED3\u679C\u6DFB\u52A0\u4E24\u8FB9\u7684\u6B4C\u66F2\u3002" }
       ]
     };
   }
@@ -17056,9 +17076,9 @@ function createFusion(providers, host3) {
       const value = await home4();
       return { title: "\u8D26\u53F7\u4E0E\u4F7F\u7528\u8BF4\u660E", description: `${value.description}
 
-\u5728\u8BBE\u7F6E \u2192 \u63D2\u4EF6 \u2192 NetEaseXQQMusic\u7684\u201C\u767B\u5F55\u76EE\u6807\u201D\u4E2D\u586B\u5199 both\uFF08\u4E24\u4E2A\u5E73\u53F0\uFF09\u3001netease\uFF08\u7F51\u6613\u4E91\uFF09\u6216 qqmusic\uFF08QQ\uFF09\uFF0C\u4FDD\u5B58\u540E\u70B9 Sign In\u3002\u9ED8\u8BA4\u4F9D\u6B21\u626B\u63CF\u4E24\u8FB9\u4E8C\u7EF4\u7801\uFF1B\u4E5F\u53EF\u5355\u72EC\u767B\u5F55\u6216\u9000\u51FA\u4E00\u4E2A\u5E73\u53F0\u3002QQ \u626B\u7801\u65B9\u5F0F\u586B\u5199 qq\uFF08\u624B\u673A QQ\uFF09\u6216 wechat\uFF08\u5FAE\u4FE1\uFF09\u3002
+\u5728\u8BBE\u7F6E \u2192 \u63D2\u4EF6 \u2192 NetEaseXQQMusic \u7684\u201C\u767B\u5F55\u76EE\u6807\u201D\u4E2D\u586B\u5199 both\uFF08\u4E24\u4E2A\u5E73\u53F0\uFF09\u3001netease\uFF08\u7F51\u6613\u4E91\uFF09\u6216 qqmusic\uFF08QQ\uFF09\uFF0C\u4FDD\u5B58\u540E\u70B9 Sign In\u3002\u9ED8\u8BA4\u4F9D\u6B21\u626B\u63CF\u4E24\u8FB9\u4E8C\u7EF4\u7801\uFF1B\u4E5F\u53EF\u5355\u72EC\u767B\u5F55\u6216\u9000\u51FA\u4E00\u4E2A\u5E73\u53F0\u3002QQ \u626B\u7801\u65B9\u5F0F\u586B\u5199 qq\uFF08\u624B\u673A QQ\uFF09\u6216 wechat\uFF08\u5FAE\u4FE1\uFF09\u3002
 
-\u5E26\u3014\u7F51\u6613\u4E91\u3015\u6216\u3014QQ\u3015\u7684\u6B4C\u66F2\u6309\u539F\u5E73\u53F0\u64AD\u653E\u3002\u65B0\u5EFA\u6B4C\u5355\u4FDD\u5B58\u5728\u672C\u673A\uFF0C\u652F\u6301\u6DF7\u5408\u6765\u6E90\uFF1B\u5E73\u53F0\u6B4C\u5355\u4E3A\u53EA\u8BFB\u3002\u63D2\u4EF6\u66F4\u65B0\u4E0D\u4F1A\u5220\u9664\u4F1A\u8BDD\u548C\u672C\u5730\u6B4C\u5355\u3002
+\u9ED8\u8BA4\u4FDD\u7559\u539F\u59CB\u6B4C\u540D\uFF0C\u4FBF\u4E8E\u63D2\u4EF6\u5C9B\u7B49\u5DE5\u5177\u5339\u914D\u6B4C\u8BCD\u3002\u5982\u9700\u5728\u6B4C\u540D\u4E2D\u663E\u793A\u3014\u7F51\u6613\u4E91\u3015\u6216\u3014QQ\u3015\uFF0C\u53EF\u628A\u201C\u6B4C\u540D\u663E\u793A\u5E73\u53F0\u6807\u7B7E\u201D\u586B\u5199\u4E3A true\uFF1B\u4F7F\u7528\u5916\u90E8\u6B4C\u8BCD\u5DE5\u5177\u65F6\u8BF7\u5173\u95ED\u3002\u66F4\u65B0\u6216\u5207\u6362\u8BBE\u7F6E\u540E\uFF0C\u4ECE\u641C\u7D22\u6216\u6B4C\u5355\u91CD\u65B0\u52A0\u5165\u6B4C\u66F2\uFF0C\u624D\u80FD\u66FF\u6362\u65E7\u64AD\u653E\u961F\u5217\u91CC\u7684\u6807\u9898\u3002\u6B4C\u66F2\u59CB\u7EC8\u6309\u539F\u5E73\u53F0\u64AD\u653E\uFF1B\u5E73\u53F0\u6B4C\u5355\u548C\u53D1\u73B0\u9875\u4FDD\u7559\u6765\u6E90\u540D\u79F0\u3002\u65B0\u5EFA\u6B4C\u5355\u4FDD\u5B58\u5728\u672C\u673A\uFF0C\u652F\u6301\u6DF7\u5408\u6765\u6E90\uFF1B\u5E73\u53F0\u6B4C\u5355\u4E3A\u53EA\u8BFB\u3002\u63D2\u4EF6\u66F4\u65B0\u4E0D\u4F1A\u5220\u9664\u4F1A\u8BDD\u548C\u672C\u5730\u6B4C\u5355\u3002
 
 \u64AD\u653E\u5B8C\u6574\u94FE\u63A5\u53D7\u8D26\u53F7\u3001\u7248\u6743\u548C\u5730\u533A\u6743\u9650\u9650\u5236\uFF1B\u6682\u505C\u3001\u7F13\u51B2\u53CA\u5931\u8D25\u540E\u662F\u5426\u8DF3\u6B4C\u7531 MyGo Music \u672C\u4F53\u5904\u7406\u3002`, sections: [] };
     }
@@ -17110,7 +17130,7 @@ function createFusion(providers, host3) {
     return call(provider, name, { ...args, id });
   };
   async function played2({ id }) {
-    const list = read("recent", []).filter((t) => t.id !== id);
+    const list = read("recent", []).filter((t) => t.id !== id).map(storedTrack);
     try {
       list.unshift(await resolveTrack(id));
     } catch {
@@ -17134,7 +17154,7 @@ function createFusion(providers, host3) {
     addToPlaylist: addToPlaylist3,
     removeFromPlaylist: removeFromPlaylist3,
     movePlaylistTrack: movePlaylistTrack2,
-    recent: () => read("recent", []),
+    recent: () => read("recent", []).map(presentTrack),
     played: played2,
     suggest: async ({ query: query3 }) => {
       const answers = await Promise.all(SOURCES.map(async (p) => {

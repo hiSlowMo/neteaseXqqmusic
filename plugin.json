@@ -1,7 +1,7 @@
 {
   "id": "music-fusion",
   "name": "NetEaseXQQMusic",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minAppVersion": "0.1.20",
   "main": "dist/index.js",
   "playback": "stream",
@@ -23,6 +23,11 @@
       "key": "qqLoginMethod",
       "label": "QQ 音乐扫码方式",
       "help": "填写 qq（手机 QQ，默认）或 wechat（微信）。若会员绑定微信，请填 wechat，并用对应账号扫码。"
+    },
+    {
+      "key": "showSourceInTitle",
+      "label": "歌名显示平台标签",
+      "help": "默认关闭，保留原始歌名以便插件岛等工具匹配歌词。填写 true 可显示〔网易云〕/〔QQ〕，false 或留空关闭。更改后请从歌单或搜索重新加入歌曲，替换旧播放队列中的标题。"
     },
     {
       "key": "importPlaylists",

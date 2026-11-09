@@ -9,7 +9,7 @@ await build({
   absWorkingDir: root, entryPoints: ['src/index.js'], bundle: true,
   format: 'esm', platform: 'browser', target: 'es2020',
   outfile: resolve(root, 'dist/index.js'), legalComments: 'inline',
-  banner: { js: '// NetEaseXQQMusic 0.1.1 — AGPL-3.0-only; full source and notices included.' },
+  banner: { js: '// NetEaseXQQMusic 0.1.2 — AGPL-3.0-only; full source and notices included.' },
 });
 await mkdir(resolve(root, 'licenses'), { recursive: true });
 for (const [source, target] of [

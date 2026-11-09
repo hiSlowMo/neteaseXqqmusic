@@ -15,10 +15,10 @@ export function convertLegacy(input) {
       if (!source) { skipped.push({ playlist: p.name, id: t.id, source: t.src }); continue; }
       const rawID = source === 'qqmusic' ? t.ref || t.id : t.id;
       if (rawID == null || rawID === '') throw new Error('旧版歌曲缺少有效 ID');
-      const label = source === 'qqmusic' ? 'QQ' : '网易云';
+      const name = String(t.name || '未命名歌曲');
       const album = t.al || t.album || {};
       const record = {
-        id: identity(source, String(rawID)), name: `${String(t.name || '未命名歌曲')} 〔${label}〕`,
+        id: identity(source, String(rawID)), name, fusionOriginalName: name,
         artists: (t.ar || t.artists || []).map(a => artist(source, a)),
         album: { id: detailID(source, album.id), name: String(album.name || ''), imageUrl: album.picUrl || '' },
         duration: Number(t.dt || t.duration) || 0,
